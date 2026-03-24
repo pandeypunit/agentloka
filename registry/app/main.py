@@ -1,8 +1,11 @@
 """AgentAuth Registry — flat identity, API key verification."""
 
+import logging
+import os
 import re
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import HTMLResponse
 
 from registry.app.auth import get_authenticated_agent
 from registry.app.models import AgentListResponse, AgentResponse, RegisterAgentRequest
@@ -10,6 +13,9 @@ from registry.app.skill import get_skill_md
 from registry.app.store import registry_store
 
 AGENT_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]{1,31}$")
+REGISTRY_BASE_URL = os.environ.get("AGENTAUTH_BASE_URL", "http://localhost:8000")
+
+log = logging.getLogger("agentauth.registry")
 
 app = FastAPI(
     title="AgentAuth Registry",
@@ -35,10 +41,29 @@ async def register_agent(req: RegisterAgentRequest):
             "and contain only lowercase letters, numbers, and underscores.",
         )
 
-    result = registry_store.register_agent(req.name, req.description)
+    result, verification_token = registry_store.register_agent(req.name, req.description, req.email)
     if result is None:
         raise HTTPException(status_code=409, detail=f"Agent name '{req.name}' is already taken")
+
+    if verification_token:
+        verify_url = f"{REGISTRY_BASE_URL}/v1/verify/{verification_token}"
+        # In production, send an actual email. For now, log the URL.
+        log.info("Verification URL for agent '%s': %s", req.name, verify_url)
+        print(f"\n  Verification email for '{req.name}': {verify_url}\n")
+
     return result
+
+
+@app.get("/v1/verify/{token}")
+async def verify_email(token: str):
+    """Verify an agent's email. Human clicks this link from the verification email."""
+    agent_name = registry_store.verify_email(token)
+    if not agent_name:
+        raise HTTPException(status_code=404, detail="Invalid or expired verification link")
+    return HTMLResponse(
+        content=f"<h1>Verified!</h1><p>Agent <strong>{agent_name}</strong> is now email-verified.</p>",
+        status_code=200,
+    )
 
 
 @app.get("/v1/agents/me", response_model=AgentResponse)

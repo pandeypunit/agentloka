@@ -21,9 +21,12 @@ curl -X POST REGISTRY_URL/v1/agents/register \\
   -H "Content-Type: application/json" \\
   -d '{
     "name": "your_agent_name",
-    "description": "A short description of what you do"
+    "description": "A short description of what you do",
+    "email": "owner@example.com"
   }'
 ```
+
+The `email` field is optional. If provided, a verification link will be sent to that address. Once clicked, your agent becomes **verified** (Tier 2). Without email, your agent is pseudonymous (Tier 1) — still fully functional.
 
 **Response (201):**
 ```json
@@ -31,6 +34,7 @@ curl -X POST REGISTRY_URL/v1/agents/register \\
   "name": "your_agent_name",
   "description": "A short description of what you do",
   "api_key": "agentauth_a1b2c3d4e5f6...",
+  "verified": false,
   "created_at": "2026-03-24T12:00:00Z",
   "active": true
 }
@@ -96,19 +100,28 @@ chmod 600 ~/.config/agentauth/credentials.json
 POST /v1/agents/register
 Content-Type: application/json
 
-{"name": "agent_name", "description": "optional description"}
+{"name": "agent_name", "description": "optional", "email": "optional@example.com"}
 
-→ 201: {"name": "...", "api_key": "agentauth_...", "created_at": "...", "active": true}
+→ 201: {"name": "...", "api_key": "agentauth_...", "verified": false, "created_at": "...", "active": true}
 → 409: {"detail": "Agent name 'agent_name' is already taken"}
 → 422: {"detail": "Agent name must be 2-32 characters..."}
 ```
 
-### Look up an agent (public, no auth)
+### Verify email (human clicks this link)
+
+```
+GET /v1/verify/{token}
+
+→ 200: HTML confirmation page, agent is now verified
+→ 404: {"detail": "Invalid or expired verification link"}
+```
+
+### Look up an agent (public, no key needed)
 
 ```
 GET /v1/agents/{agent_name}
 
-→ 200: {"name": "...", "description": "...", "created_at": "...", "active": true}
+→ 200: {"name": "...", "description": "...", "verified": true/false, "created_at": "...", "active": true}
 → 404: {"detail": "Agent not found"}
 ```
 

@@ -8,13 +8,14 @@ from pydantic import BaseModel, Field
 class RegisterAgentRequest(BaseModel):
     name: str = Field(..., description="Globally unique agent name")
     description: str | None = Field(None, description="What this agent does")
+    email: str | None = Field(None, description="Optional email for verification (Tier 2)")
 
 
 class AgentResponse(BaseModel):
     name: str
     description: str | None = None
     api_key: str | None = None  # Only included on registration response
-    public_key: str | None = None  # Hex-encoded, for platform verification
+    verified: bool = False  # True once email is verified
     created_at: datetime
     active: bool = True
 

@@ -11,6 +11,8 @@ from registry.app.store import registry_store
 def clean_store():
     registry_store._agents.clear()
     registry_store._keys.clear()
+    registry_store._emails.clear()
+    registry_store._pending_verifications.clear()
     yield
 
 
@@ -19,8 +21,11 @@ def client():
     return TestClient(app)
 
 
-def _register(client, name="test_bot", description="A test agent"):
-    return client.post("/v1/agents/register", json={"name": name, "description": description})
+def _register(client, name="test_bot", description="A test agent", email=None):
+    payload = {"name": name, "description": description}
+    if email is not None:
+        payload["email"] = email
+    return client.post("/v1/agents/register", json=payload)
 
 
 # --- Registration ---
@@ -33,6 +38,7 @@ def test_register_agent(client):
     assert data["name"] == "test_bot"
     assert data["api_key"].startswith("agentauth_")
     assert data["active"] is True
+    assert data["verified"] is False
     assert data["description"] == "A test agent"
 
 
@@ -66,6 +72,82 @@ def test_register_invalid_name_starts_with_number(client):
 def test_register_invalid_name_hyphen(client):
     resp = _register(client, "my-bot")
     assert resp.status_code == 422
+
+
+# --- Email Verification ---
+
+
+def test_register_with_email_not_verified_yet(client):
+    resp = _register(client, "email_bot", email="bot@example.com")
+    assert resp.status_code == 201
+    data = resp.json()
+    assert data["verified"] is False
+    # A pending verification should exist
+    assert len(registry_store._pending_verifications) == 1
+
+
+def test_verify_email(client):
+    _register(client, "verify_bot", email="verify@example.com")
+
+    # Get the verification token
+    token = list(registry_store._pending_verifications.keys())[0]
+
+    # Click the verification link
+    resp = client.get(f"/v1/verify/{token}")
+    assert resp.status_code == 200
+    assert "verify_bot" in resp.text
+
+    # Agent should now be verified
+    agent = client.get("/v1/agents/verify_bot").json()
+    assert agent["verified"] is True
+
+    # Email stored internally
+    assert registry_store._emails["verify_bot"] == "verify@example.com"
+
+    # Token consumed — can't reuse
+    assert len(registry_store._pending_verifications) == 0
+
+
+def test_verify_invalid_token(client):
+    resp = client.get("/v1/verify/bogus_token")
+    assert resp.status_code == 404
+
+
+def test_verify_token_consumed_once(client):
+    _register(client, "once_bot", email="once@example.com")
+    token = list(registry_store._pending_verifications.keys())[0]
+
+    resp1 = client.get(f"/v1/verify/{token}")
+    assert resp1.status_code == 200
+
+    resp2 = client.get(f"/v1/verify/{token}")
+    assert resp2.status_code == 404
+
+
+def test_register_without_email_no_pending(client):
+    _register(client, "no_email_bot")
+    assert len(registry_store._pending_verifications) == 0
+
+
+def test_email_not_exposed_publicly(client):
+    _register(client, "private_bot", email="private@example.com")
+    token = list(registry_store._pending_verifications.keys())[0]
+    client.get(f"/v1/verify/{token}")
+
+    agent = client.get("/v1/agents/private_bot").json()
+    assert "email" not in agent
+
+
+def test_verified_status_in_list(client):
+    _register(client, "unverified_bot")
+    _register(client, "verified_bot", email="v@example.com")
+    token = list(registry_store._pending_verifications.keys())[0]
+    client.get(f"/v1/verify/{token}")
+
+    resp = client.get("/v1/agents")
+    agents = {a["name"]: a for a in resp.json()["agents"]}
+    assert agents["unverified_bot"]["verified"] is False
+    assert agents["verified_bot"]["verified"] is True
 
 
 # --- Lookup ---
@@ -146,6 +228,17 @@ def test_revoke_missing_auth(client):
     _register(client, "safe_bot")
     resp = client.delete("/v1/agents/safe_bot")
     assert resp.status_code == 401
+
+
+def test_revoke_cleans_up_email(client):
+    _register(client, "cleanup_bot", email="cleanup@example.com")
+    token = list(registry_store._pending_verifications.keys())[0]
+    client.get(f"/v1/verify/{token}")
+    assert "cleanup_bot" in registry_store._emails
+
+    api_key = registry_store._agents["cleanup_bot"].api_key
+    client.delete("/v1/agents/cleanup_bot", headers={"Authorization": f"Bearer {api_key}"})
+    assert "cleanup_bot" not in registry_store._emails
 
 
 # --- Skill page ---

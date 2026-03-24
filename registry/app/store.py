@@ -12,27 +12,63 @@ class RegistryStore:
     def __init__(self):
         self._agents: dict[str, AgentResponse] = {}  # name -> AgentResponse
         self._keys: dict[str, str] = {}               # api_key -> agent name
+        self._emails: dict[str, str] = {}             # agent name -> email (only after verification)
+        self._pending_verifications: dict[str, dict] = {}  # token -> {"agent_name", "email"}
 
     @staticmethod
     def _generate_api_key() -> str:
         return "agentauth_" + secrets.token_hex(24)
 
-    def register_agent(self, name: str, description: str | None) -> AgentResponse | None:
-        """Register a new agent. Returns None if name is taken."""
+    @staticmethod
+    def _generate_verification_token() -> str:
+        return secrets.token_urlsafe(32)
+
+    def register_agent(
+        self, name: str, description: str | None, email: str | None = None
+    ) -> tuple[AgentResponse | None, str | None]:
+        """Register a new agent. Returns (agent, verification_token) or (None, None) if name is taken."""
         if name in self._agents:
-            return None
+            return None, None
 
         api_key = self._generate_api_key()
         agent = AgentResponse(
             name=name,
             description=description,
             api_key=api_key,
+            verified=False,
             created_at=datetime.now(UTC),
             active=True,
         )
         self._agents[name] = agent
         self._keys[api_key] = name
-        return agent
+
+        verification_token = None
+        if email:
+            verification_token = self._generate_verification_token()
+            self._pending_verifications[verification_token] = {
+                "agent_name": name,
+                "email": email,
+            }
+
+        return agent, verification_token
+
+    def verify_email(self, token: str) -> str | None:
+        """Verify an email token. Returns agent name on success, None on failure."""
+        pending = self._pending_verifications.pop(token, None)
+        if not pending:
+            return None
+
+        agent_name = pending["agent_name"]
+        email = pending["email"]
+
+        agent = self._agents.get(agent_name)
+        if not agent:
+            return None
+
+        # Store verified email and mark agent as verified
+        self._emails[agent_name] = email
+        self._agents[agent_name] = agent.model_copy(update={"verified": True})
+        return agent_name
 
     def get_agent(self, name: str) -> AgentResponse | None:
         agent = self._agents.get(name)
@@ -58,6 +94,7 @@ class RegistryStore:
             return False
         self._agents.pop(name)
         self._keys.pop(api_key, None)
+        self._emails.pop(name, None)
         return True
 
 
