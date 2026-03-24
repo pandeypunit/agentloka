@@ -99,7 +99,7 @@ def test_list_agents(client):
         assert agent["api_key"] is None
 
 
-# --- Authentication ---
+# --- Identity Verification ---
 
 
 def test_get_me(client):

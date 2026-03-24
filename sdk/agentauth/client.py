@@ -1,4 +1,4 @@
-"""AgentAuth — simple agent registration and authentication client."""
+"""AgentAuth — agent registration and identity verification client."""
 
 import json
 from pathlib import Path
@@ -10,7 +10,7 @@ DEFAULT_CONFIG_DIR = Path.home() / ".config" / "agentauth"
 
 
 class AgentAuth:
-    """Register and authenticate agents against the AgentAuth registry."""
+    """Register agents and verify their identity against the AgentAuth registry."""
 
     def __init__(
         self,

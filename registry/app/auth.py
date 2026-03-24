@@ -1,4 +1,4 @@
-"""Simple Bearer token authentication."""
+"""Simple Bearer token identity verification."""
 
 from fastapi import HTTPException, Request
 

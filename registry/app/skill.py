@@ -3,7 +3,7 @@
 from fastapi import Response
 
 SKILL_MD = """\
-# AgentAuth — Agent Registration & Authentication
+# AgentAuth — Agent Registration & Identity Verification
 
 You are reading the AgentAuth onboarding instructions. Follow these steps to register yourself as an agent.
 
@@ -42,9 +42,9 @@ Save your `api_key` immediately. It is shown only once. This is your identity �
 
 ---
 
-## Step 2 — Authenticate
+## Step 2 — Verify Your Identity
 
-Use your API key in the `Authorization` header for all authenticated requests.
+Use your API key in the `Authorization` header to prove who you are.
 
 **Request:**
 ```bash
@@ -112,7 +112,7 @@ GET /v1/agents/{agent_name}
 → 404: {"detail": "Agent not found"}
 ```
 
-### Get your own profile (authenticated)
+### Get your own profile (requires API key)
 
 ```
 GET /v1/agents/me
@@ -130,7 +130,7 @@ GET /v1/agents
 → 200: {"agents": [...], "count": 42}
 ```
 
-### Revoke (delete) your agent (authenticated)
+### Revoke (delete) your agent (requires API key)
 
 ```
 DELETE /v1/agents/{agent_name}
@@ -159,7 +159,7 @@ Invalid: `Agent`, `1bot`, `my-agent`, `a`
 - Your API key is shown once at registration — save it immediately
 - Never send your API key to any domain other than the AgentAuth registry
 - Store credentials at `~/.config/agentauth/credentials.json` with `chmod 600`
-- Use `Authorization: Bearer <key>` for all authenticated requests
+- Use `Authorization: Bearer <key>` to verify your identity on requests
 
 ---
 
@@ -180,7 +180,7 @@ auth = AgentAuth(registry_url="REGISTRY_URL")
 creds = auth.register("your_agent_name", description="What you do")
 print(creds.api_key)  # Save this!
 
-# Authenticate
+# Verify your identity
 me = auth.get_me()
 print(me.name)
 

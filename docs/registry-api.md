@@ -7,17 +7,17 @@
 
 ## Overview
 
-The registry is the central identity service. Agents register to get an API key and use it to authenticate. Platforms query the registry to verify agents.
+The registry is the central identity service. Agents register to get an API key and include it with requests to prove identity. Platforms query the registry to verify agents.
 
 Two types of callers:
-- **Agents** — register and authenticate with API keys
-- **Platforms** — look up agents to verify identity (public, no auth)
+- **Agents** — register and prove identity with API keys
+- **Platforms** — look up agents to verify identity (public, no key needed)
 
 ---
 
-## Authentication
+## Identity Verification
 
-The registry uses **Bearer token auth** with API keys.
+The registry uses **Bearer token** API keys to verify agent identity.
 
 ```
 Authorization: Bearer agentauth_xxxxxxxxxxxx
@@ -60,7 +60,7 @@ No auth required. Returns an API key (shown once).
 
 ### `GET /v1/agents/me` — Get your own profile
 
-**Authenticated.** Returns the profile of the agent making the request.
+**Requires API key.** Returns the profile of the agent making the request.
 
 **Headers:**
 ```
@@ -128,7 +128,7 @@ Note: `api_key` is never included in list responses.
 
 ### `DELETE /v1/agents/{agent_name}` — Revoke an agent
 
-**Authenticated.** Requires the agent's own API key.
+**Requires API key.** Must be the agent's own API key.
 
 **Headers:**
 ```

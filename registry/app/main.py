@@ -1,4 +1,4 @@
-"""AgentAuth Registry — flat identity, simple API key auth."""
+"""AgentAuth Registry — flat identity, API key verification."""
 
 import re
 
@@ -43,7 +43,7 @@ async def register_agent(req: RegisterAgentRequest):
 
 @app.get("/v1/agents/me", response_model=AgentResponse)
 async def get_me(request: Request):
-    """Get the authenticated agent's profile. Requires API key."""
+    """Get your agent's profile. Requires API key to verify identity."""
     agent_name = await get_authenticated_agent(request)
     agent = registry_store.get_agent(agent_name)
     return agent

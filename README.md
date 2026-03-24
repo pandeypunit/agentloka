@@ -1,17 +1,17 @@
 # AgentAuth
 
-The identity layer for AI agents. Register, authenticate, and manage agents — no human in the loop.
+The identity layer for AI agents. Register and verify agent identity — no human in the loop.
 
 ## What is AgentAuth?
 
-AgentAuth is a simple registration and authentication system for AI agents. An agent registers with a name and description, gets an API key, and uses it to authenticate. No passwords, no sessions, no browser — just `curl`.
+AgentAuth is a simple registration and identity verification system for AI agents. An agent registers with a name and description, gets an API key, and includes it with requests to prove identity. No passwords, no sessions, no browser — just `curl`.
 
 Think of it like phone numbers for agents: a single registry where agents get a unique identity that any platform can verify.
 
 ## How It Works
 
 1. Agent registers → gets an API key (shown once)
-2. Agent authenticates with `Authorization: Bearer agentauth_xxxxx`
+2. Agent proves identity with `Authorization: Bearer agentauth_xxxxx`
 3. Platforms verify agents by looking them up on the registry
 
 No master keys, no crypto derivation, no human claim step. Simple and flat.
@@ -40,7 +40,7 @@ curl -X POST http://localhost:8000/v1/agents/register \
 
 Save the `api_key` — it is shown only once.
 
-**Authenticate:**
+**Verify your identity:**
 ```bash
 curl http://localhost:8000/v1/agents/me \
   -H "Authorization: Bearer agentauth_a1b2c3d4e5f6..."
@@ -66,7 +66,7 @@ auth = AgentAuth(registry_url="http://localhost:8000")
 result = auth.register("my_bot", description="My first agent")
 print(result["api_key"])  # Save this!
 
-# Authenticate
+# Verify identity
 me = auth.get_me("my_bot")
 
 # Auth headers for any HTTP client
@@ -130,7 +130,7 @@ Invalid: `Agent`, `1bot`, `my-agent`, `a`
 - API key is shown once at registration — save it immediately
 - Never send your API key to any domain other than the AgentAuth registry
 - Credentials stored at `~/.config/agentauth/credentials/<name>.json` with `600` permissions
-- Use `Authorization: Bearer <key>` for all authenticated requests
+- Use `Authorization: Bearer <key>` to prove your identity on requests
 
 ## Project Structure
 
@@ -144,7 +144,7 @@ agentauth/
 ├── registry/                     # FastAPI registry service
 │   ├── app/
 │   │   ├── main.py               # API endpoints
-│   │   ├── auth.py               # Bearer token auth
+│   │   ├── auth.py               # Bearer token identity verification
 │   │   ├── models.py             # Request/response models
 │   │   ├── store.py              # In-memory store (v0.1)
 │   │   └── skill.py              # Markdown instruction page
@@ -166,7 +166,7 @@ python -m pytest registry/tests/ sdk/tests/ -v
 
 - [x] Flat agent identity (name + API key)
 - [x] Registry API (FastAPI, in-memory store)
-- [x] SDK client (register, authenticate, revoke)
+- [x] SDK client (register, verify, revoke)
 - [x] CLI
 - [x] Skill.md instruction page (curl-first)
 - [ ] Persistent database (SQLite/PostgreSQL)
