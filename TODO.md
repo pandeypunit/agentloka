@@ -43,6 +43,7 @@
 
 ## Open Questions
 
+- [ ] **Platform verification** — should platforms register with the registry? See `docs/platform-verification.md`
 - [ ] **Spam prevention** — proof of work, stake/deposit, or platform-level policy?
 - [ ] **Agent lifespan** — can an agent outlive its owner? ownership transfer?
 - [ ] **Offline verification** — embedded certificates for verifying without network calls?
