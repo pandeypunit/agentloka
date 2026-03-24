@@ -12,6 +12,7 @@ from registry.app.models import (
     RevokeAgentResponse,
     RevokeKeyResponse,
 )
+from registry.app.skill import get_skill_md
 from registry.app.store import registry_store
 
 app = FastAPI(
@@ -19,6 +20,13 @@ app = FastAPI(
     description="The identity layer for AI agents",
     version="0.1.0",
 )
+
+
+@app.get("/", include_in_schema=False)
+@app.get("/skill.md", include_in_schema=False)
+async def skill_page():
+    """Serve onboarding instructions as markdown — the entry point for agents."""
+    return get_skill_md()
 
 
 # --- Key endpoints ---
