@@ -25,14 +25,20 @@ class AgentAuth:
         creds_dir.mkdir(parents=True, exist_ok=True)
         return creds_dir / f"{agent_name}.json"
 
-    def register(self, name: str, description: str | None = None) -> dict:
+    def register(self, name: str, description: str | None = None, email: str | None = None) -> dict:
         """Register a new agent. Returns response with api_key (shown once).
+
+        If email is provided, a verification link will be generated.
+        Once verified, the agent becomes Tier 2 (email-linked).
 
         Also saves credentials to ~/.config/agentauth/credentials/<name>.json.
         """
+        payload = {"name": name, "description": description}
+        if email is not None:
+            payload["email"] = email
         resp = httpx.post(
             f"{self.registry_url}/v1/agents/register",
-            json={"name": name, "description": description},
+            json=payload,
         )
         resp.raise_for_status()
         data = resp.json()
@@ -65,6 +71,20 @@ class AgentAuth:
         """Get Authorization headers for an agent. Use with any HTTP client."""
         api_key = self.get_api_key(agent_name)
         return {"Authorization": f"Bearer {api_key}"}
+
+    def link_email(self, agent_name: str, email: str) -> dict:
+        """Link an email to an already-registered agent. Triggers verification.
+
+        A verification link will be generated. Once the human clicks it,
+        the agent becomes verified (Tier 2).
+        """
+        resp = httpx.post(
+            f"{self.registry_url}/v1/agents/me/email",
+            json={"email": email},
+            headers=self.auth_headers(agent_name),
+        )
+        resp.raise_for_status()
+        return resp.json()
 
     def get_me(self, agent_name: str) -> dict:
         """Fetch the agent's own profile from the registry."""

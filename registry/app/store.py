@@ -70,6 +70,15 @@ class RegistryStore:
         self._agents[agent_name] = agent.model_copy(update={"verified": True})
         return agent_name
 
+    def link_email(self, agent_name: str, email: str) -> str:
+        """Link an email to an existing agent. Returns a verification token."""
+        token = self._generate_verification_token()
+        self._pending_verifications[token] = {
+            "agent_name": agent_name,
+            "email": email,
+        }
+        return token
+
     def get_agent(self, name: str) -> AgentResponse | None:
         agent = self._agents.get(name)
         if agent:

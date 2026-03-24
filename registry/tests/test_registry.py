@@ -150,6 +150,49 @@ def test_verified_status_in_list(client):
     assert agents["verified_bot"]["verified"] is True
 
 
+# --- Link email (post-registration) ---
+
+
+def test_link_email_after_registration(client):
+    resp = _register(client, "late_email_bot")
+    api_key = resp.json()["api_key"]
+
+    # Agent starts unverified
+    assert client.get("/v1/agents/late_email_bot").json()["verified"] is False
+
+    # Link email
+    link_resp = client.post(
+        "/v1/agents/me/email",
+        json={"email": "late@example.com"},
+        headers={"Authorization": f"Bearer {api_key}"},
+    )
+    assert link_resp.status_code == 200
+    assert link_resp.json()["agent_name"] == "late_email_bot"
+
+    # Verify via token
+    token = list(registry_store._pending_verifications.keys())[0]
+    client.get(f"/v1/verify/{token}")
+
+    # Now verified
+    agent = client.get("/v1/agents/late_email_bot").json()
+    assert agent["verified"] is True
+    assert registry_store._emails["late_email_bot"] == "late@example.com"
+
+
+def test_link_email_missing_auth(client):
+    resp = client.post("/v1/agents/me/email", json={"email": "x@example.com"})
+    assert resp.status_code == 401
+
+
+def test_link_email_invalid_key(client):
+    resp = client.post(
+        "/v1/agents/me/email",
+        json={"email": "x@example.com"},
+        headers={"Authorization": "Bearer agentauth_fake"},
+    )
+    assert resp.status_code == 401
+
+
 # --- Lookup ---
 
 

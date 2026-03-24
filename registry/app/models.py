@@ -20,6 +20,10 @@ class AgentResponse(BaseModel):
     active: bool = True
 
 
+class LinkEmailRequest(BaseModel):
+    email: str = Field(..., description="Email address to link and verify")
+
+
 class AgentListResponse(BaseModel):
     agents: list[AgentResponse]
     count: int

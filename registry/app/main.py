@@ -8,7 +8,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
 from registry.app.auth import get_authenticated_agent
-from registry.app.models import AgentListResponse, AgentResponse, RegisterAgentRequest
+from registry.app.models import AgentListResponse, AgentResponse, LinkEmailRequest, RegisterAgentRequest
 from registry.app.skill import get_skill_md
 from registry.app.store import registry_store
 
@@ -72,6 +72,21 @@ async def get_me(request: Request):
     agent_name = await get_authenticated_agent(request)
     agent = registry_store.get_agent(agent_name)
     return agent
+
+
+@app.post("/v1/agents/me/email")
+async def link_email(req: LinkEmailRequest, request: Request):
+    """Link an email to your agent. Triggers a verification email."""
+    agent_name = await get_authenticated_agent(request)
+
+    token = registry_store.link_email(agent_name, req.email)
+    verify_url = f"{REGISTRY_BASE_URL}/v1/verify/{token}"
+
+    # In production, send an actual email. For now, log the URL.
+    log.info("Verification URL for agent '%s': %s", agent_name, verify_url)
+    print(f"\n  Verification email for '{agent_name}': {verify_url}\n")
+
+    return {"agent_name": agent_name, "message": "Verification email sent. Check your inbox."}
 
 
 @app.get("/v1/agents/{agent_name}", response_model=AgentResponse)

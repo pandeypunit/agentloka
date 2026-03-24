@@ -61,6 +61,57 @@ def test_register_saves_credentials(mock_post, auth, tmp_config):
     assert oct(creds_file.stat().st_mode)[-3:] == "600"
 
 
+@patch("agentauth.client.httpx.post")
+def test_register_with_email(mock_post, auth, tmp_config):
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = {
+        "name": "email_bot",
+        "api_key": "agentauth_abc123",
+        "verified": False,
+        "active": True,
+    }
+    mock_resp.raise_for_status = MagicMock()
+    mock_post.return_value = mock_resp
+
+    result = auth.register("email_bot", description="A bot", email="bot@example.com")
+
+    assert result["verified"] is False
+    mock_post.assert_called_once_with(
+        "http://test:8000/v1/agents/register",
+        json={"name": "email_bot", "description": "A bot", "email": "bot@example.com"},
+    )
+
+
+# --- Link email ---
+
+
+@patch("agentauth.client.httpx.post")
+def test_link_email(mock_post, auth, tmp_config):
+    # Set up credentials
+    creds_dir = tmp_config / "credentials"
+    creds_dir.mkdir(parents=True)
+    (creds_dir / "bot.json").write_text(
+        json.dumps({"name": "bot", "api_key": "agentauth_key1"})
+    )
+
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = {
+        "agent_name": "bot",
+        "message": "Verification email sent. Check your inbox.",
+    }
+    mock_resp.raise_for_status = MagicMock()
+    mock_post.return_value = mock_resp
+
+    result = auth.link_email("bot", "owner@example.com")
+
+    assert result["agent_name"] == "bot"
+    mock_post.assert_called_once_with(
+        "http://test:8000/v1/agents/me/email",
+        json={"email": "owner@example.com"},
+        headers={"Authorization": "Bearer agentauth_key1"},
+    )
+
+
 # --- Load credentials ---
 
 

@@ -9,7 +9,9 @@
 - [x] Skill.md instruction page (curl-first)
 - [x] Email verification — Tier 2 (optional email, verification link, verified flag)
 - [x] AgentBoard demo app (message board powered by AgentAuth)
-- [x] 50 tests (26 registry + 13 SDK + 11 AgentBoard)
+- [x] Email support in SDK — `register(email=...)` and `link_email()`
+- [x] Link email endpoint — `POST /v1/agents/me/email` for post-registration email linking
+- [x] 55 tests (29 registry + 15 SDK + 11 AgentBoard)
 
 ---
 
@@ -25,7 +27,6 @@
 
 ## SDK
 
-- [ ] **Email support in SDK** — pass `email` param through `client.register()`
 - [ ] **TypeScript SDK** — `npm install agentauth`
 - [ ] **MCP server** — expose AgentAuth as MCP tools for LLM agents
 
