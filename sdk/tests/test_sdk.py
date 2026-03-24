@@ -1,0 +1,205 @@
+"""Tests for the AgentAuth SDK client — flat identity model."""
+
+import json
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from agentauth.client import AgentAuth
+
+
+@pytest.fixture
+def tmp_config(tmp_path):
+    return tmp_path / "agentauth"
+
+
+@pytest.fixture
+def auth(tmp_config):
+    return AgentAuth(registry_url="http://test:8000", config_dir=tmp_config)
+
+
+# --- Credential storage ---
+
+
+def test_credentials_path_creates_dir(auth, tmp_config):
+    path = auth._credentials_path("my_bot")
+    assert path == tmp_config / "credentials" / "my_bot.json"
+    assert path.parent.exists()
+
+
+# --- Register ---
+
+
+@patch("agentauth.client.httpx.post")
+def test_register_saves_credentials(mock_post, auth, tmp_config):
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = {
+        "name": "test_bot",
+        "api_key": "agentauth_abc123",
+        "active": True,
+    }
+    mock_resp.raise_for_status = MagicMock()
+    mock_post.return_value = mock_resp
+
+    result = auth.register("test_bot", description="A bot")
+
+    assert result["api_key"] == "agentauth_abc123"
+    mock_post.assert_called_once_with(
+        "http://test:8000/v1/agents/register",
+        json={"name": "test_bot", "description": "A bot"},
+    )
+
+    # Credentials saved locally
+    creds_file = tmp_config / "credentials" / "test_bot.json"
+    assert creds_file.exists()
+    saved = json.loads(creds_file.read_text())
+    assert saved["name"] == "test_bot"
+    assert saved["api_key"] == "agentauth_abc123"
+
+    # File permissions
+    assert oct(creds_file.stat().st_mode)[-3:] == "600"
+
+
+# --- Load credentials ---
+
+
+def test_load_credentials(auth, tmp_config):
+    creds_dir = tmp_config / "credentials"
+    creds_dir.mkdir(parents=True)
+    creds_file = creds_dir / "my_bot.json"
+    creds_file.write_text(json.dumps({"name": "my_bot", "api_key": "agentauth_xyz"}))
+
+    creds = auth.load_credentials("my_bot")
+    assert creds["api_key"] == "agentauth_xyz"
+
+
+def test_load_credentials_not_found(auth):
+    with pytest.raises(FileNotFoundError, match="No credentials found"):
+        auth.load_credentials("ghost_bot")
+
+
+# --- Get API key ---
+
+
+def test_get_api_key(auth, tmp_config):
+    creds_dir = tmp_config / "credentials"
+    creds_dir.mkdir(parents=True)
+    (creds_dir / "bot.json").write_text(
+        json.dumps({"name": "bot", "api_key": "agentauth_key1"})
+    )
+    assert auth.get_api_key("bot") == "agentauth_key1"
+
+
+# --- Auth headers ---
+
+
+def test_auth_headers(auth, tmp_config):
+    creds_dir = tmp_config / "credentials"
+    creds_dir.mkdir(parents=True)
+    (creds_dir / "bot.json").write_text(
+        json.dumps({"name": "bot", "api_key": "agentauth_key1"})
+    )
+    headers = auth.auth_headers("bot")
+    assert headers == {"Authorization": "Bearer agentauth_key1"}
+
+
+# --- Get me ---
+
+
+@patch("agentauth.client.httpx.get")
+def test_get_me(mock_get, auth, tmp_config):
+    creds_dir = tmp_config / "credentials"
+    creds_dir.mkdir(parents=True)
+    (creds_dir / "bot.json").write_text(
+        json.dumps({"name": "bot", "api_key": "agentauth_key1"})
+    )
+
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = {"name": "bot", "active": True}
+    mock_resp.raise_for_status = MagicMock()
+    mock_get.return_value = mock_resp
+
+    result = auth.get_me("bot")
+    assert result["name"] == "bot"
+    mock_get.assert_called_once_with(
+        "http://test:8000/v1/agents/me",
+        headers={"Authorization": "Bearer agentauth_key1"},
+    )
+
+
+# --- Get agent (public) ---
+
+
+@patch("agentauth.client.httpx.get")
+def test_get_agent(mock_get, auth):
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = {"name": "other_bot", "active": True}
+    mock_resp.raise_for_status = MagicMock()
+    mock_get.return_value = mock_resp
+
+    result = auth.get_agent("other_bot")
+    assert result["name"] == "other_bot"
+    mock_get.assert_called_once_with("http://test:8000/v1/agents/other_bot")
+
+
+# --- List agents ---
+
+
+def test_list_agents_empty(auth):
+    assert auth.list_agents() == []
+
+
+def test_list_agents(auth, tmp_config):
+    creds_dir = tmp_config / "credentials"
+    creds_dir.mkdir(parents=True)
+    (creds_dir / "alpha.json").write_text(
+        json.dumps({"name": "alpha", "api_key": "agentauth_a"})
+    )
+    (creds_dir / "beta.json").write_text(
+        json.dumps({"name": "beta", "api_key": "agentauth_b"})
+    )
+
+    agents = auth.list_agents()
+    assert len(agents) == 2
+    names = {a["name"] for a in agents}
+    assert names == {"alpha", "beta"}
+
+
+# --- Revoke ---
+
+
+@patch("agentauth.client.httpx.delete")
+def test_revoke_success(mock_delete, auth, tmp_config):
+    creds_dir = tmp_config / "credentials"
+    creds_dir.mkdir(parents=True)
+    creds_file = creds_dir / "bot.json"
+    creds_file.write_text(json.dumps({"name": "bot", "api_key": "agentauth_key1"}))
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.raise_for_status = MagicMock()
+    mock_delete.return_value = mock_resp
+
+    assert auth.revoke("bot") is True
+    assert not creds_file.exists()
+
+
+@patch("agentauth.client.httpx.delete")
+def test_revoke_wrong_key(mock_delete, auth, tmp_config):
+    creds_dir = tmp_config / "credentials"
+    creds_dir.mkdir(parents=True)
+    creds_file = creds_dir / "bot.json"
+    creds_file.write_text(json.dumps({"name": "bot", "api_key": "agentauth_wrong"}))
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 403
+    mock_delete.return_value = mock_resp
+
+    assert auth.revoke("bot") is False
+    assert not creds_file.exists()  # Local creds still cleaned up
+
+
+def test_revoke_not_registered(auth):
+    with pytest.raises(FileNotFoundError):
+        auth.revoke("ghost_bot")

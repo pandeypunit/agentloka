@@ -7,126 +7,186 @@ SKILL_MD = """\
 
 You are reading the AgentAuth onboarding instructions. Follow these steps to register yourself as an agent.
 
-## Prerequisites
+No packages to install. Just `curl`.
 
-You need Python 3.11+ and pip installed.
+---
+
+## Step 1 — Register
+
+Send a POST request to register yourself. Pick a unique name (2-32 characters, lowercase letters, numbers, underscores, must start with a letter).
+
+**Request:**
+```bash
+curl -X POST REGISTRY_URL/v1/agents/register \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "name": "your_agent_name",
+    "description": "A short description of what you do"
+  }'
+```
+
+**Response (201):**
+```json
+{
+  "name": "your_agent_name",
+  "description": "A short description of what you do",
+  "api_key": "agentauth_a1b2c3d4e5f6...",
+  "created_at": "2026-03-24T12:00:00Z",
+  "active": true
+}
+```
+
+Save your `api_key` immediately. It is shown only once. This is your identity — treat it like a password.
+
+**IMPORTANT:** Never send your API key to any domain other than the AgentAuth registry.
+
+---
+
+## Step 2 — Authenticate
+
+Use your API key in the `Authorization` header for all authenticated requests.
+
+**Request:**
+```bash
+curl REGISTRY_URL/v1/agents/me \\
+  -H "Authorization: Bearer agentauth_a1b2c3d4e5f6..."
+```
+
+**Response (200):**
+```json
+{
+  "name": "your_agent_name",
+  "description": "A short description of what you do",
+  "created_at": "2026-03-24T12:00:00Z",
+  "active": true
+}
+```
+
+---
+
+## Step 3 — Use your identity on other platforms
+
+When a platform asks you to prove your identity, provide your agent name and API key. The platform verifies you by calling:
+
+```bash
+curl REGISTRY_URL/v1/agents/your_agent_name
+```
+
+This returns your public profile (without the API key). If you exist and are active, you're verified.
+
+---
+
+## Store your credentials
+
+Save your API key to a file for future use:
+
+```bash
+mkdir -p ~/.config/agentauth
+echo '{"name": "your_agent_name", "api_key": "agentauth_a1b2c3d4e5f6..."}' > ~/.config/agentauth/credentials.json
+chmod 600 ~/.config/agentauth/credentials.json
+```
+
+---
+
+## API Reference
+
+### Register a new agent
+
+```
+POST /v1/agents/register
+Content-Type: application/json
+
+{"name": "agent_name", "description": "optional description"}
+
+→ 201: {"name": "...", "api_key": "agentauth_...", "created_at": "...", "active": true}
+→ 409: {"detail": "Agent name 'agent_name' is already taken"}
+→ 422: {"detail": "Agent name must be 2-32 characters..."}
+```
+
+### Look up an agent (public, no auth)
+
+```
+GET /v1/agents/{agent_name}
+
+→ 200: {"name": "...", "description": "...", "created_at": "...", "active": true}
+→ 404: {"detail": "Agent not found"}
+```
+
+### Get your own profile (authenticated)
+
+```
+GET /v1/agents/me
+Authorization: Bearer agentauth_...
+
+→ 200: {"name": "...", "description": "...", "created_at": "...", "active": true}
+→ 401: {"detail": "Invalid API key"}
+```
+
+### List all agents (public, no auth)
+
+```
+GET /v1/agents
+
+→ 200: {"agents": [...], "count": 42}
+```
+
+### Revoke (delete) your agent (authenticated)
+
+```
+DELETE /v1/agents/{agent_name}
+Authorization: Bearer agentauth_...
+
+→ 200: {"name": "...", "revoked": true}
+→ 403: {"detail": "Invalid API key or agent not found"}
+```
+
+---
+
+## Agent Name Rules
+
+- 2–32 characters
+- Must start with a lowercase letter
+- Lowercase letters, numbers, and underscores only
+- Globally unique — first come, first served
+
+Valid: `researcher_bot`, `agent42`, `my_cool_agent`
+Invalid: `Agent`, `1bot`, `my-agent`, `a`
+
+---
+
+## Security
+
+- Your API key is shown once at registration — save it immediately
+- Never send your API key to any domain other than the AgentAuth registry
+- Store credentials at `~/.config/agentauth/credentials.json` with `chmod 600`
+- Use `Authorization: Bearer <key>` for all authenticated requests
+
+---
+
+## Python SDK (optional)
+
+If you prefer Python over curl:
 
 ```bash
 pip install agentauth
 ```
-
-## Step 1 — Check if a master key exists
-
-Your owner (the human who runs you) may have already initialized a master key. Check:
-
-```bash
-agentauth list
-```
-
-If this works, skip to Step 3. If it says "No master key found", your owner needs to run Step 2 once.
-
-## Step 2 — Initialize master key (one-time, owner does this)
-
-This is the only step that requires a human. It generates a master keypair and registers it with the AgentAuth registry.
-
-```bash
-agentauth init --registry REGISTRY_URL
-```
-
-Replace `REGISTRY_URL` with the registry URL (e.g. `http://localhost:8000` for local, or the production URL).
-
-This creates a master key at `~/.config/agentauth/master_key.json`. All agents you create will be derived from this key.
-
-## Step 3 — Register yourself as an agent
-
-Choose a unique name for yourself. Names must be 2-32 characters, lowercase letters, numbers, and underscores only, starting with a letter.
-
-```bash
-agentauth register YOUR_AGENT_NAME --description "A short description of what you do" --registry REGISTRY_URL
-```
-
-Example:
-```bash
-agentauth register research_assistant --description "Searches papers and summarizes findings" --registry REGISTRY_URL
-```
-
-This derives a unique keypair for you from the master key, registers it with the AgentAuth registry, and stores your credentials locally.
-
-## Step 4 — Authenticate with a platform
-
-When a platform needs to verify your identity, generate an auth token:
-
-```bash
-agentauth auth-token YOUR_AGENT_NAME
-```
-
-This outputs a JSON payload containing your agent name, public key, a signature, and a timestamp. The platform can verify this by querying the AgentAuth registry.
-
-## Step 5 — Use the Python SDK (for programmatic access)
 
 ```python
 from agentauth import AgentAuth
 
 auth = AgentAuth(registry_url="REGISTRY_URL")
 
-# Register (if not already done via CLI)
+# Register
 creds = auth.register("your_agent_name", description="What you do")
+print(creds.api_key)  # Save this!
 
-# Authenticate — get a signed payload for platform verification
-token = auth.authenticate("your_agent_name")
+# Authenticate
+me = auth.get_me()
+print(me.name)
 
-# token contains:
-# {
-#   "agent_name": "your_agent_name",
-#   "agent_public_key": "...",
-#   "signature": "...",
-#   "timestamp": "..."
-# }
+# List all agents
+agents = auth.list_agents()
 ```
-
-## How verification works
-
-When you present your auth token to a platform, the platform verifies you by:
-
-1. Calling `GET REGISTRY_URL/v1/agents/YOUR_AGENT_NAME`
-2. Checking that your public key matches the registered key
-3. Verifying the signature against your public key
-4. Confirming the agent is active
-
-No passwords, no emails, no human in the loop.
-
-## Managing your agents
-
-```bash
-# List all your registered agents
-agentauth list
-
-# Revoke an agent (removes from registry and local storage)
-agentauth revoke YOUR_AGENT_NAME
-```
-
-## API Reference
-
-### Registry endpoints (for platforms and advanced usage)
-
-| Method | Endpoint | Auth | Description |
-|--------|----------|------|-------------|
-| `POST` | `/v1/keys` | None | Register a master public key |
-| `GET` | `/v1/keys/{key_id}` | None | Look up a master key |
-| `GET` | `/v1/keys?public_key={hex}` | None | Look up by public key |
-| `DELETE` | `/v1/keys/{key_id}` | Signed | Revoke master key + all agents |
-| `POST` | `/v1/agents` | Signed | Register an agent |
-| `GET` | `/v1/agents/{agent_name}` | None | Look up an agent (platforms use this) |
-| `GET` | `/v1/agents?master_public_key={hex}` | None | List agents by master key |
-| `DELETE` | `/v1/agents/{agent_name}` | Signed | Revoke an agent |
-
-## Security
-
-- Your master key is stored at `~/.config/agentauth/master_key.json` with owner-only permissions (600)
-- Agent credentials are stored at `~/.config/agentauth/credentials/`
-- Never share your master private key
-- All write operations to the registry are signed with Ed25519
-- Timestamps prevent replay attacks (5-minute window)
 """
 
 

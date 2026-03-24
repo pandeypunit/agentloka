@@ -1,107 +1,64 @@
-"""In-memory store for the registry. Replace with a database for production."""
+"""In-memory store — flat identity, one API key per agent."""
 
+import secrets
 from datetime import UTC, datetime
-import hashlib
 
-from registry.app.models import KeyResponse, AgentResponse
+from registry.app.models import AgentResponse
 
 
 class RegistryStore:
-    """In-memory store for master keys and agents. Good enough for v0.1."""
+    """In-memory store for agents. Replace with a database for production."""
 
     def __init__(self):
-        self._keys: dict[str, KeyResponse] = {}          # key_id -> KeyResponse
-        self._keys_by_pub: dict[str, str] = {}            # public_key hex -> key_id
-        self._agents: dict[str, AgentResponse] = {}       # agent_name -> AgentResponse
-        self._agents_by_master: dict[str, list[str]] = {} # master pub hex -> [agent_names]
+        self._agents: dict[str, AgentResponse] = {}  # name -> AgentResponse
+        self._keys: dict[str, str] = {}               # api_key -> agent name
 
     @staticmethod
-    def _make_key_id(public_key: str) -> str:
-        return "k_" + hashlib.sha256(bytes.fromhex(public_key)).hexdigest()[:12]
+    def _generate_api_key() -> str:
+        return "agentauth_" + secrets.token_hex(24)
 
-    # --- Keys ---
+    def register_agent(self, name: str, description: str | None) -> AgentResponse | None:
+        """Register a new agent. Returns None if name is taken."""
+        if name in self._agents:
+            return None
 
-    def register_key(self, public_key: str, label: str) -> KeyResponse:
-        if public_key in self._keys_by_pub:
-            return None  # Already exists
-
-        key_id = self._make_key_id(public_key)
-        record = KeyResponse(
-            key_id=key_id,
-            public_key=public_key,
-            label=label,
-            created_at=datetime.now(UTC),
-            agent_count=0,
-        )
-        self._keys[key_id] = record
-        self._keys_by_pub[public_key] = key_id
-        self._agents_by_master[public_key] = []
-        return record
-
-    def get_key_by_id(self, key_id: str) -> KeyResponse | None:
-        record = self._keys.get(key_id)
-        if record:
-            record.agent_count = len(self._agents_by_master.get(record.public_key, []))
-        return record
-
-    def get_key_by_public_key(self, public_key: str) -> KeyResponse | None:
-        key_id = self._keys_by_pub.get(public_key)
-        if key_id:
-            return self.get_key_by_id(key_id)
-        return None
-
-    def revoke_key(self, key_id: str) -> int:
-        """Revoke a key and all its agents. Returns count of agents revoked."""
-        record = self._keys.pop(key_id, None)
-        if not record:
-            return -1
-
-        self._keys_by_pub.pop(record.public_key, None)
-        agent_names = self._agents_by_master.pop(record.public_key, [])
-        for name in agent_names:
-            self._agents.pop(name, None)
-        return len(agent_names)
-
-    # --- Agents ---
-
-    def register_agent(
-        self, agent_name: str, agent_public_key: str,
-        master_public_key: str, description: str | None,
-    ) -> AgentResponse | None:
-        if agent_name in self._agents:
-            return None  # Name taken
-
-        if master_public_key not in self._keys_by_pub:
-            raise LookupError("Master key not registered")
-
-        record = AgentResponse(
-            agent_name=agent_name,
-            agent_public_key=agent_public_key,
-            master_public_key=master_public_key,
+        api_key = self._generate_api_key()
+        agent = AgentResponse(
+            name=name,
             description=description,
+            api_key=api_key,
             created_at=datetime.now(UTC),
             active=True,
         )
-        self._agents[agent_name] = record
-        self._agents_by_master[master_public_key].append(agent_name)
-        return record
+        self._agents[name] = agent
+        self._keys[api_key] = name
+        return agent
 
-    def get_agent(self, agent_name: str) -> AgentResponse | None:
-        return self._agents.get(agent_name)
+    def get_agent(self, name: str) -> AgentResponse | None:
+        agent = self._agents.get(name)
+        if agent:
+            # Return without api_key (public lookup)
+            return agent.model_copy(update={"api_key": None})
+        return None
 
-    def list_agents_by_master(self, master_public_key: str) -> list[AgentResponse]:
-        names = self._agents_by_master.get(master_public_key, [])
-        return [self._agents[n] for n in names if n in self._agents]
+    def get_agent_by_key(self, api_key: str) -> AgentResponse | None:
+        name = self._keys.get(api_key)
+        if name:
+            return self._agents.get(name)
+        return None
 
-    def revoke_agent(self, agent_name: str, master_public_key: str) -> bool:
-        agent = self._agents.get(agent_name)
-        if not agent or agent.master_public_key != master_public_key:
+    def list_agents(self) -> list[AgentResponse]:
+        # Return without api_keys
+        return [a.model_copy(update={"api_key": None}) for a in self._agents.values()]
+
+    def revoke_agent(self, name: str, api_key: str) -> bool:
+        """Revoke an agent. Must provide the correct API key."""
+        agent = self._agents.get(name)
+        if not agent or agent.api_key != api_key:
             return False
-        self._agents.pop(agent_name)
-        if agent_name in self._agents_by_master.get(master_public_key, []):
-            self._agents_by_master[master_public_key].remove(agent_name)
+        self._agents.pop(name)
+        self._keys.pop(api_key, None)
         return True
 
 
-# Singleton for the app
 registry_store = RegistryStore()

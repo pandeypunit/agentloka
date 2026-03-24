@@ -1,5 +1,6 @@
 """AgentAuth CLI — command-line interface for agent management."""
 
+import json
 import sys
 
 import click
@@ -17,40 +18,17 @@ def cli(ctx, registry):
 
 
 @cli.command()
-@click.option("--label", default="default", help="Label for this master key")
-@click.pass_context
-def init(ctx, label):
-    """Generate master keypair and register with the registry."""
-    auth: AgentAuth = ctx.obj["auth"]
-    try:
-        result = auth.init(label=label)
-        click.echo(f"Master key registered successfully.")
-        click.echo(f"  Key ID:     {result['key_id']}")
-        click.echo(f"  Public Key: {result['public_key']}")
-        click.echo(f"  Label:      {result['label']}")
-    except RuntimeError as e:
-        click.echo(f"Error: {e}", err=True)
-        sys.exit(1)
-    except Exception as e:
-        click.echo(f"Failed to register with registry: {e}", err=True)
-        sys.exit(1)
-
-
-@cli.command()
 @click.argument("agent_name")
 @click.option("--description", "-d", default=None, help="Agent description")
 @click.pass_context
 def register(ctx, agent_name, description):
-    """Register a new agent."""
+    """Register a new agent and save credentials locally."""
     auth: AgentAuth = ctx.obj["auth"]
     try:
-        creds = auth.register(agent_name, description=description)
+        result = auth.register(agent_name, description=description)
         click.echo(f"Agent '{agent_name}' registered successfully.")
-        click.echo(f"  Public Key: {creds.agent_public_key}")
-        click.echo(f"  Master Key: {creds.master_public_key}")
-    except RuntimeError as e:
-        click.echo(f"Error: {e}", err=True)
-        sys.exit(1)
+        click.echo(f"  API Key: {result['api_key']}")
+        click.echo("\n  Save this key — it is shown only once.")
     except Exception as e:
         click.echo(f"Registration failed: {e}", err=True)
         sys.exit(1)
@@ -63,41 +41,46 @@ def list_agents(ctx):
     auth: AgentAuth = ctx.obj["auth"]
     agents = auth.list_agents()
     if not agents:
-        click.echo("No agents registered.")
+        click.echo("No agents registered locally.")
         return
     for agent in agents:
-        click.echo(f"  {agent.agent_name}  (key: {agent.agent_public_key[:16]}...)")
+        click.echo(f"  {agent['name']}  (key: {agent['api_key'][:20]}...)")
 
 
 @cli.command()
 @click.argument("agent_name")
 @click.pass_context
-def revoke(ctx, agent_name):
-    """Revoke an agent."""
+def me(ctx, agent_name):
+    """Fetch your agent's profile from the registry."""
     auth: AgentAuth = ctx.obj["auth"]
     try:
-        revoked = auth.revoke(agent_name)
-        if revoked:
-            click.echo(f"Agent '{agent_name}' revoked.")
-        else:
-            click.echo(f"Agent '{agent_name}' was already removed from registry. Local credentials cleaned up.")
+        profile = auth.get_me(agent_name)
+        click.echo(json.dumps(profile, indent=2, default=str))
+    except FileNotFoundError as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
     except Exception as e:
-        click.echo(f"Revocation failed: {e}", err=True)
+        click.echo(f"Failed: {e}", err=True)
         sys.exit(1)
 
 
 @cli.command()
 @click.argument("agent_name")
 @click.pass_context
-def auth_token(ctx, agent_name):
-    """Get authentication payload for an agent."""
+def revoke(ctx, agent_name):
+    """Revoke an agent from the registry and delete local credentials."""
     auth: AgentAuth = ctx.obj["auth"]
     try:
-        token = auth.authenticate(agent_name)
-        import json
-        click.echo(json.dumps(token, indent=2))
+        revoked = auth.revoke(agent_name)
+        if revoked:
+            click.echo(f"Agent '{agent_name}' revoked.")
+        else:
+            click.echo(f"Failed to revoke '{agent_name}' — invalid key or not found.")
     except FileNotFoundError as e:
         click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+    except Exception as e:
+        click.echo(f"Revocation failed: {e}", err=True)
         sys.exit(1)
 
 

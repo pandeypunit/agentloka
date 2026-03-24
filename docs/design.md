@@ -2,9 +2,11 @@
 
 > From Moltbook's Current Approach to a General-Purpose Agent Identity Library
 
-**Version:** 0.3
+**Version:** 0.4
 **Date:** 2026-03-24
-**Status:** Decisions finalized, ready for implementation
+**Status:** v0.1 implemented — flat identity model
+
+> **Note (v0.4):** After discussion, we simplified v0.1 to use a **flat identity model** — one API key per agent, no master keys, no crypto derivation. This keeps the barrier to entry as low as possible (agents register with `curl`, no packages needed). The master key approach (Approach 2) is preserved in this document and backed up in `agentauth2/` for potential future use. Sections 7–9 below have been updated to reflect the actual v0.1 implementation.
 
 ---
 
@@ -373,186 +375,126 @@ requests.get(url, headers=headers)
 
 ### 7.1 Registry Model — Shared Neutral Registry
 
-The AgentAuth registry is a centralized service that all platforms query. Owners register their master public key once; any platform can verify an agent by querying the registry.
+The AgentAuth registry is a centralized service that all platforms query. Start centralized, document the protocol as an open standard, federate later (see `vision.md`).
 
-Start centralized, document the protocol as an open standard, federate later (see `vision.md`).
+### 7.2 Identity Model — Flat (v0.1)
 
-### 7.2 Minimum Bar — Tier 1 (Pseudonymous)
+After exploring the master key + derived agent key approach, we simplified v0.1 to a **flat identity model** like Moltbook:
 
-The registry accepts any public key. No email, no domain required. Just generate a keypair and register it.
+- Agent registers with `name` + optional `description`
+- Registry returns an `api_key` (shown once, `agentauth_` prefix)
+- Agent authenticates with `Authorization: Bearer agentauth_...`
+- No master keys, no crypto derivation, no human claim step
 
-Email-linked (Tier 2) and domain-linked (Tier 3) are optional upgrades platforms can require. The registry supports all three but enforces none beyond Tier 1.
+**Why:** The master key model adds complexity that isn't needed when starting a new ecosystem. Agents should be able to register with a single `curl` command. The master key approach is preserved for potential future use (backed up in `agentauth2/`).
 
-### 7.3 Master Keys Per Person — Multiple Allowed
+### 7.3 Agent Naming — Globally Unique
 
-A person can register multiple master keys. Not recommended, but not enforceable either.
+Agent names are globally unique across the entire registry. The agent name is the primary identifier. Rules: 2-32 characters, starts with lowercase letter, lowercase + numbers + underscores only.
 
-### 7.4 Agent Naming — Globally Unique
+### 7.4 curl-First Design
 
-Agent names are globally unique across the entire registry. One key per agent. The agent name is the primary identifier in the system.
+The primary interface is `curl`. No package installation required for registration and authentication. The Python SDK is optional. The registry serves a skill page at `/` and `/skill.md` with curl-first instructions.
 
-### 7.5 Key Derivation — HKDF-SHA256
+### 7.5 Moltbook Adapter — Deferred
 
-Not BIP32. HKDF is simpler, works natively with Ed25519, and is sufficient for this use case:
-
-```
-HKDF-SHA256(
-    input_key_material = master_private_key,
-    info = f"{platform}:{agent_name}",
-    length = 32
-) → agent seed → Ed25519 keypair
-```
-
-### 7.6 Data Models — Pydantic
-
-Use Pydantic (not dataclasses) for validation and JSON serialization.
-
-### 7.7 Moltbook Adapter — Deferred
-
-Not in v0.1 scope. The first platform to integrate will be a custom app built by the project owner. Moltbook adapter is a future addition.
+Not in v0.1 scope. The first platform to integrate will be a custom app built by the project owner.
 
 ### Open Questions (Deferred)
 
-- Spam prevention strategy (proof of work, rate limiting, etc.)
+- Spam prevention strategy (rate limiting at application level)
 - Agent lifespan and ownership transfer
 - Offline verification (embedded certificates)
 - Federation protocol specification
+- When/if to introduce master key model for agent fleets
 
 ---
 
-## 8. Implementation Plan
+## 8. v0.1 Implementation (Actual)
 
-### 8.1 Language Strategy
-
-| Phase | Language | Distribution | Target |
-|-------|----------|--------------|--------|
-| **Phase 1** | Python | `pip install agentauth` | Developers who know Python, LangChain/CrewAI agents |
-| **Phase 2** | TypeScript | `npm install agentauth` | Node.js agents, OpenClaw, MCP-native agents |
-
-Python first because:
-- Simpler to prototype and iterate on
-- LangChain, LlamaIndex, CrewAI, AutoGen are all Python-first
-- Most AI/ML developers are more comfortable in Python
-- Cryptographic primitives (`cryptography`, `httpx`) are mature and well-documented
-
-### 8.2 Python Package Structure
+### 8.1 Architecture
 
 ```
 agentauth/
-├── __init__.py               # Public API surface
-├── core/
-│   ├── identity.py           # AgentIdentity dataclass
-│   ├── credentials.py        # Credentials dataclass
-│   ├── credential_store.py   # Read/write ~/.config/agentauth/
-│   └── session.py            # Authenticated httpx session
-├── keys/
-│   ├── master.py             # Generate + store master keypair
-│   └── derivation.py        # Derive agent keys from master (HKDF)
-├── adapters/
-│   ├── base.py               # Abstract adapter interface
-│   └── moltbook.py           # Moltbook-specific registration + auth
-├── verification/
-│   ├── dns.py                # DNS TXT lookup (domain-linked tier)
-│   ├── email.py              # One-time email (email-linked tier)
-│   └── challenge.py          # Math/CAPTCHA challenge solver
-└── cli.py                    # `agentauth` CLI entry point (click)
+├── sdk/                          # Python SDK (pip install agentauth)
+│   ├── agentauth/
+│   │   ├── client.py             # AgentAuth main class
+│   │   └── cli.py                # CLI commands (click)
+│   └── tests/
+├── registry/                     # FastAPI registry service
+│   ├── app/
+│   │   ├── main.py               # API endpoints
+│   │   ├── auth.py               # Bearer token auth
+│   │   ├── models.py             # Pydantic request/response models
+│   │   ├── store.py              # In-memory store (database is future)
+│   │   └── skill.py              # Markdown instruction page
+│   └── tests/
+└── docs/
 ```
 
-### 8.3 Python API Design
+### 8.2 API Endpoints
+
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| `POST` | `/v1/agents/register` | None | Register a new agent |
+| `GET` | `/v1/agents/me` | Bearer | Get your own profile |
+| `GET` | `/v1/agents/{name}` | None | Look up any agent (public) |
+| `GET` | `/v1/agents` | None | List all agents (public) |
+| `DELETE` | `/v1/agents/{name}` | Bearer | Revoke your agent |
+
+### 8.3 Python SDK
 
 ```python
 from agentauth import AgentAuth
-from agentauth.adapters.moltbook import MoltbookAdapter
 
-# Initialize — loads master key from ~/.config/agentauth/keys.json
-auth = AgentAuth(
-    adapters=[MoltbookAdapter()],
-    store="~/.config/agentauth/credentials.json"
-)
+auth = AgentAuth(registry_url="http://localhost:8000")
 
-# Register — fully autonomous
-result = await auth.register("moltbook", name="researcher_bot", description="AI research agent")
+# Register — returns dict with api_key
+result = auth.register("my_bot", description="What I do")
 
-# Authenticate
-session = await auth.login("moltbook", "researcher_bot")
+# Auth headers for any HTTP client
+headers = auth.auth_headers("my_bot")
+# → {"Authorization": "Bearer agentauth_..."}
 
-# Use — pre-authenticated httpx client, drop into any project
-async with session.client() as client:
-    response = await client.post("/posts", json={"title": "Hello agents!"})
+# Fetch own profile
+me = auth.get_me("my_bot")
 
-# Multi-agent
-await auth.register("moltbook", name="writer_bot")
-await auth.register("moltbook", name="monitor_bot")
+# List locally registered agents
 agents = auth.list_agents()
+
+# Revoke
+auth.revoke("my_bot")
 ```
 
-### 8.4 CLI (one-time human setup)
+### 8.4 CLI
 
 ```bash
-pip install agentauth
-
-# One-time: generate master keypair + register with a platform
-agentauth init
-
-# Autonomous: register a new agent (no human needed)
-agentauth register moltbook --name my_bot
-
-# List all registered agents
+agentauth register my_bot -d "What I do"
 agentauth list
-
-# Revoke an agent
-agentauth revoke moltbook --name my_bot
+agentauth me my_bot
+agentauth revoke my_bot
 ```
 
-### 8.5 Distribution & Integration by Agent Type
-
-| Agent Type | Integration |
-|---|---|
-| Python script / LangChain / CrewAI | `pip install agentauth`, use SDK directly |
-| OpenClaw agent | `SKILL.md` — agent reads and self-onboards |
-| Claude Code agent | `pip install agentauth` + MCP server |
-| Any LLM via MCP | Run `agentauth-mcp`, point MCP client at it |
-| TypeScript / Node.js agent | Phase 2 — `npm install agentauth` |
-
-### 8.6 Key Dependencies (Python)
+### 8.5 Dependencies
 
 | Dependency | Purpose |
 |---|---|
-| `cryptography` | Ed25519 keypair generation, signing, verification |
-| `httpx` | Async HTTP client (session wrapper) |
+| `httpx` | HTTP client for SDK |
 | `click` | CLI interface |
-| `pydantic` | Data models (AgentIdentity, Credentials) |
-| `dnspython` | DNS TXT record lookups (domain-linked tier) |
-| `keyring` | Secure OS-level key storage (optional) |
+| `fastapi` | Registry API framework |
+| `pydantic` | Data models (registry) |
 
----
+### 8.6 Tests
 
-## 9. v0.1 Scope & Build Order
-
-### What "done" looks like
-
-An agent can autonomously:
-1. Generate its own keypair (derived from owner's master key)
-2. Register with the AgentAuth registry
-3. Authenticate with a platform that queries the registry
-
-No human in the loop at any step after `agentauth init`.
-
-### Build order
-
-| Step | Component | Deliverable |
-|------|-----------|-------------|
-| **1** | `sdk/keys/` | Master key generation (Ed25519) + HKDF agent key derivation |
-| **2** | `sdk/core/` | Pydantic models + credential store (`~/.config/agentauth/`) |
-| **3** | Registry API spec | Document the contract before building |
-| **4** | `registry/` | FastAPI service — register keys, look up keys, verify agents |
-| **5** | `sdk/` AgentAuth class | Main SDK entry point — init, register, authenticate |
-| **6** | `sdk/cli.py` | `agentauth init` + `agentauth register` CLI commands |
+- Registry: 18 tests (registration, lookup, list, auth, revocation, skill page)
+- SDK: 13 tests (credential storage, register, auth headers, revoke)
 
 ### Out of scope for v0.1
 
-- Moltbook adapter
+- Persistent database (in-memory only)
+- Rate limiting
 - Email-linked / domain-linked tiers
+- Moltbook adapter
 - Federation / open protocol spec
 - TypeScript SDK
 - MCP server

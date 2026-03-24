@@ -1,19 +1,15 @@
-"""AgentAuth Registry — FastAPI application."""
+"""AgentAuth Registry — flat identity, simple API key auth."""
 
-from fastapi import FastAPI, HTTPException, Query, Request
+import re
 
-from registry.app.auth import verify_request_signature
-from registry.app.models import (
-    AgentListResponse,
-    AgentResponse,
-    KeyResponse,
-    RegisterAgentRequest,
-    RegisterKeyRequest,
-    RevokeAgentResponse,
-    RevokeKeyResponse,
-)
+from fastapi import FastAPI, HTTPException, Request
+
+from registry.app.auth import get_authenticated_agent
+from registry.app.models import AgentListResponse, AgentResponse, RegisterAgentRequest
 from registry.app.skill import get_skill_md
 from registry.app.store import registry_store
+
+AGENT_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]{1,31}$")
 
 app = FastAPI(
     title="AgentAuth Registry",
@@ -29,112 +25,55 @@ async def skill_page():
     return get_skill_md()
 
 
-# --- Key endpoints ---
-
-
-@app.post("/v1/keys", response_model=KeyResponse, status_code=201)
-async def register_key(req: RegisterKeyRequest):
-    """Register a master public key. No auth needed (Tier 1 — pseudonymous)."""
-    # Validate key format
-    try:
-        key_bytes = bytes.fromhex(req.public_key)
-        if len(key_bytes) != 32:
-            raise ValueError()
-    except ValueError:
-        raise HTTPException(status_code=422, detail="Invalid key: must be 64 hex characters (32 bytes)")
-
-    result = registry_store.register_key(req.public_key, req.label)
-    if result is None:
-        raise HTTPException(status_code=409, detail="Key already registered")
-    return result
-
-
-@app.get("/v1/keys/{key_id}", response_model=KeyResponse)
-async def get_key(key_id: str):
-    """Look up a master key by key_id. Public endpoint."""
-    record = registry_store.get_key_by_id(key_id)
-    if not record:
-        raise HTTPException(status_code=404, detail="Key not found")
-    return record
-
-
-@app.get("/v1/keys", response_model=KeyResponse)
-async def get_key_by_public_key(public_key: str = Query(...)):
-    """Look up a master key by public key hex. Public endpoint."""
-    record = registry_store.get_key_by_public_key(public_key)
-    if not record:
-        raise HTTPException(status_code=404, detail="Key not found")
-    return record
-
-
-@app.delete("/v1/keys/{key_id}", response_model=RevokeKeyResponse)
-async def revoke_key(key_id: str, request: Request):
-    """Revoke a master key and all its agents. Authenticated."""
-    public_key_hex = await verify_request_signature(request)
-
-    # Verify the caller owns this key
-    record = registry_store.get_key_by_id(key_id)
-    if not record:
-        raise HTTPException(status_code=404, detail="Key not found")
-    if record.public_key != public_key_hex:
-        raise HTTPException(status_code=403, detail="Not your key")
-
-    count = registry_store.revoke_key(key_id)
-    return RevokeKeyResponse(agents_revoked=count)
-
-
-# --- Agent endpoints ---
-
-
-@app.post("/v1/agents", response_model=AgentResponse, status_code=201)
-async def register_agent(request: Request):
-    """Register an agent under a master key. Authenticated."""
-    public_key_hex = await verify_request_signature(request)
-
-    body = await request.body()
-    req = RegisterAgentRequest.model_validate_json(body)
-
-    # Verify the signer is the master key owner
-    if req.master_public_key != public_key_hex:
-        raise HTTPException(status_code=403, detail="Signature key does not match master_public_key")
-
-    try:
-        result = registry_store.register_agent(
-            agent_name=req.agent_name,
-            agent_public_key=req.agent_public_key,
-            master_public_key=req.master_public_key,
-            description=req.description,
+@app.post("/v1/agents/register", response_model=AgentResponse, status_code=201)
+async def register_agent(req: RegisterAgentRequest):
+    """Register a new agent. No auth needed. Returns an API key (shown once)."""
+    if not AGENT_NAME_PATTERN.match(req.name):
+        raise HTTPException(
+            status_code=422,
+            detail="Agent name must be 2-32 characters, start with a lowercase letter, "
+            "and contain only lowercase letters, numbers, and underscores.",
         )
-    except LookupError:
-        raise HTTPException(status_code=404, detail="Master key not registered. Register it first via POST /v1/keys")
 
+    result = registry_store.register_agent(req.name, req.description)
     if result is None:
-        raise HTTPException(status_code=409, detail=f"Agent name '{req.agent_name}' is already taken")
+        raise HTTPException(status_code=409, detail=f"Agent name '{req.name}' is already taken")
     return result
+
+
+@app.get("/v1/agents/me", response_model=AgentResponse)
+async def get_me(request: Request):
+    """Get the authenticated agent's profile. Requires API key."""
+    agent_name = await get_authenticated_agent(request)
+    agent = registry_store.get_agent(agent_name)
+    return agent
 
 
 @app.get("/v1/agents/{agent_name}", response_model=AgentResponse)
 async def get_agent(agent_name: str):
     """Look up an agent. Public endpoint — platforms call this to verify."""
-    record = registry_store.get_agent(agent_name)
-    if not record:
+    agent = registry_store.get_agent(agent_name)
+    if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
-    return record
+    return agent
 
 
 @app.get("/v1/agents", response_model=AgentListResponse)
-async def list_agents(master_public_key: str = Query(...)):
-    """List all agents under a master key. Public endpoint."""
-    agents = registry_store.list_agents_by_master(master_public_key)
+async def list_agents():
+    """List all registered agents. Public endpoint."""
+    agents = registry_store.list_agents()
     return AgentListResponse(agents=agents, count=len(agents))
 
 
-@app.delete("/v1/agents/{agent_name}", response_model=RevokeAgentResponse)
+@app.delete("/v1/agents/{agent_name}")
 async def revoke_agent(agent_name: str, request: Request):
-    """Revoke an agent. Authenticated — must be signed by owning master key."""
-    public_key_hex = await verify_request_signature(request)
+    """Revoke (delete) an agent. Requires the agent's API key."""
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing Authorization header")
 
-    success = registry_store.revoke_agent(agent_name, public_key_hex)
+    api_key = auth_header[7:]
+    success = registry_store.revoke_agent(agent_name, api_key)
     if not success:
-        raise HTTPException(status_code=404, detail="Agent not found or not owned by this key")
-    return RevokeAgentResponse(agent_name=agent_name)
+        raise HTTPException(status_code=403, detail="Invalid API key or agent not found")
+    return {"name": agent_name, "revoked": True}

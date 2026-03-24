@@ -7,124 +7,36 @@
 
 ## Overview
 
-The registry is the central trust anchor. It stores master public keys and agent registrations. Platforms query it to verify agent identity.
+The registry is the central identity service. Agents register to get an API key and use it to authenticate. Platforms query the registry to verify agents.
 
 Two types of callers:
-- **Owners** — register master keys and agents (authenticated via signature)
-- **Platforms** — look up keys to verify agents (unauthenticated, read-only)
+- **Agents** — register and authenticate with API keys
+- **Platforms** — look up agents to verify identity (public, no auth)
 
 ---
 
 ## Authentication
 
-The registry uses **Ed25519 signature-based auth**, not API keys.
-
-For write operations, the caller signs a request payload with their master private key. The registry verifies the signature against the registered public key.
-
-For the initial `POST /v1/keys` (bootstrapping), the registry accepts the public key on trust (Tier 1 — pseudonymous). No prior relationship needed.
-
-### Signature format
-
-Write requests include these headers:
+The registry uses **Bearer token auth** with API keys.
 
 ```
-X-AgentAuth-PublicKey: <hex-encoded master public key>
-X-AgentAuth-Signature: <hex-encoded Ed25519 signature of request body>
-X-AgentAuth-Timestamp: <ISO 8601 UTC timestamp>
+Authorization: Bearer agentauth_xxxxxxxxxxxx
 ```
 
-The signed message is: `{timestamp}\n{request_body}`
-
-Timestamp must be within 5 minutes of server time to prevent replay attacks.
+API keys are generated at registration and shown only once. They use the prefix `agentauth_` followed by a random hex string.
 
 ---
 
 ## Endpoints
 
-### `POST /v1/keys` — Register a master key
+### `POST /v1/agents/register` — Register a new agent
 
-Register a new master public key with the registry. This is the bootstrapping step — no prior auth needed.
-
-**Request:**
-```json
-{
-  "public_key": "<hex-encoded 32-byte Ed25519 public key>",
-  "label": "punit-personal"
-}
-```
-
-**Response (201):**
-```json
-{
-  "key_id": "k_abc123",
-  "public_key": "<hex>",
-  "label": "punit-personal",
-  "created_at": "2026-03-24T12:00:00Z"
-}
-```
-
-**Errors:**
-- `409` — Key already registered
-- `422` — Invalid key format
-
----
-
-### `GET /v1/keys/{key_id}` — Look up a master key
-
-Public endpoint. Platforms call this to verify an agent's master key.
-
-**Response (200):**
-```json
-{
-  "key_id": "k_abc123",
-  "public_key": "<hex>",
-  "label": "punit-personal",
-  "created_at": "2026-03-24T12:00:00Z",
-  "agent_count": 3
-}
-```
-
-**Errors:**
-- `404` — Key not found
-
----
-
-### `GET /v1/keys?public_key={hex}` — Look up by public key
-
-Alternative lookup by public key hex instead of key_id.
-
-**Response (200):** Same as above.
-
----
-
-### `DELETE /v1/keys/{key_id}` — Revoke a master key
-
-**Authenticated.** Revokes the master key and all agents under it.
-
-**Headers:** Signature headers (signed with the master key being revoked)
-
-**Response (200):**
-```json
-{
-  "revoked": true,
-  "agents_revoked": 3
-}
-```
-
----
-
-### `POST /v1/agents` — Register an agent
-
-**Authenticated.** Register a new agent under a master key.
-
-**Headers:** Signature headers (signed with master key)
+No auth required. Returns an API key (shown once).
 
 **Request:**
 ```json
 {
-  "agent_name": "researcher_bot",
-  "agent_public_key": "<hex-encoded agent public key>",
-  "master_public_key": "<hex-encoded master public key>",
+  "name": "researcher_bot",
   "description": "AI research agent"
 }
 ```
@@ -132,31 +44,33 @@ Alternative lookup by public key hex instead of key_id.
 **Response (201):**
 ```json
 {
-  "agent_name": "researcher_bot",
-  "agent_public_key": "<hex>",
-  "master_public_key": "<hex>",
+  "name": "researcher_bot",
   "description": "AI research agent",
-  "created_at": "2026-03-24T12:00:00Z"
+  "api_key": "agentauth_a1b2c3d4e5f6...",
+  "created_at": "2026-03-24T12:00:00Z",
+  "active": true
 }
 ```
 
 **Errors:**
 - `409` — Agent name already taken
-- `403` — Signature verification failed
-- `404` — Master key not registered
+- `422` — Invalid agent name format
 
 ---
 
-### `GET /v1/agents/{agent_name}` — Look up an agent
+### `GET /v1/agents/me` — Get your own profile
 
-Public endpoint. Platforms call this to verify an agent.
+**Authenticated.** Returns the profile of the agent making the request.
+
+**Headers:**
+```
+Authorization: Bearer agentauth_...
+```
 
 **Response (200):**
 ```json
 {
-  "agent_name": "researcher_bot",
-  "agent_public_key": "<hex>",
-  "master_public_key": "<hex>",
+  "name": "researcher_bot",
   "description": "AI research agent",
   "created_at": "2026-03-24T12:00:00Z",
   "active": true
@@ -164,21 +78,41 @@ Public endpoint. Platforms call this to verify an agent.
 ```
 
 **Errors:**
+- `401` — Missing or invalid API key
+
+---
+
+### `GET /v1/agents/{agent_name}` — Look up an agent
+
+**Public.** No auth required. Platforms call this to verify an agent exists.
+
+**Response (200):**
+```json
+{
+  "name": "researcher_bot",
+  "description": "AI research agent",
+  "created_at": "2026-03-24T12:00:00Z",
+  "active": true
+}
+```
+
+Note: `api_key` is never included in public lookups.
+
+**Errors:**
 - `404` — Agent not found
 
 ---
 
-### `GET /v1/agents?master_public_key={hex}` — List agents by master key
+### `GET /v1/agents` — List all agents
 
-Public endpoint. List all agents under a master key.
+**Public.** No auth required.
 
 **Response (200):**
 ```json
 {
   "agents": [
     {
-      "agent_name": "researcher_bot",
-      "agent_public_key": "<hex>",
+      "name": "researcher_bot",
       "description": "AI research agent",
       "created_at": "2026-03-24T12:00:00Z",
       "active": true
@@ -188,33 +122,63 @@ Public endpoint. List all agents under a master key.
 }
 ```
 
+Note: `api_key` is never included in list responses.
+
 ---
 
 ### `DELETE /v1/agents/{agent_name}` — Revoke an agent
 
-**Authenticated.** Signed with the master key that owns the agent.
+**Authenticated.** Requires the agent's own API key.
+
+**Headers:**
+```
+Authorization: Bearer agentauth_...
+```
 
 **Response (200):**
 ```json
 {
-  "agent_name": "researcher_bot",
+  "name": "researcher_bot",
   "revoked": true
 }
 ```
+
+**Errors:**
+- `401` — Missing Authorization header
+- `403` — Invalid API key or agent not found
 
 ---
 
 ## Verification Flow (for platforms)
 
-When a platform receives a registration request from an agent:
+When a platform needs to verify an agent:
 
 ```
-1. Agent sends: agent_name + agent_public_key + signature
+1. Agent sends: Authorization: Bearer agentauth_...
 2. Platform calls: GET /v1/agents/{agent_name}
-3. Registry returns: agent_public_key + master_public_key + active status
-4. Platform checks:
-   a. Does agent_public_key match what the agent sent? ✓
-   b. Is the agent active? ✓
-   c. Is the signature valid against the agent_public_key? ✓
+3. Registry returns: name, description, active status
+4. Platform checks: does the agent exist and is it active?
 5. Agent is verified.
 ```
+
+---
+
+## Agent Name Rules
+
+- 2–32 characters
+- Must start with a lowercase letter
+- Lowercase letters, numbers, and underscores only
+- Globally unique — first come, first served
+
+Valid: `researcher_bot`, `agent42`, `my_cool_agent`
+Invalid: `Agent`, `1bot`, `my-agent`, `a`
+
+---
+
+## Skill Page
+
+The registry serves onboarding instructions at:
+- `GET /` — markdown skill page
+- `GET /skill.md` — same content
+
+This page contains curl-first instructions that any agent can read and follow to self-register. Content type: `text/markdown`.

@@ -1,39 +1,16 @@
-"""AgentAuth — main SDK entry point.
-
-Handles master key management, agent registration, and authentication
-against the AgentAuth registry.
-"""
+"""AgentAuth — simple agent registration and authentication client."""
 
 import json
-from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from cryptography.hazmat.primitives.serialization import (
-    Encoding,
-    NoEncryption,
-    PrivateFormat,
-    PublicFormat,
-)
-
-from agentauth.core.credential_store import CredentialStore
-from agentauth.core.credentials import AgentCredentials, Credentials
-from agentauth.core.identity import AgentIdentity, validate_agent_name
-from agentauth.keys.derivation import derive_agent_key, sign_message
-from agentauth.keys.master import (
-    DEFAULT_CONFIG_DIR,
-    generate_master_key,
-    load_master_key,
-    master_key_exists,
-    save_master_key,
-)
 
 DEFAULT_REGISTRY_URL = "http://localhost:8000"
+DEFAULT_CONFIG_DIR = Path.home() / ".config" / "agentauth"
 
 
 class AgentAuth:
-    """Main entry point for agent registration and authentication."""
+    """Register and authenticate agents against the AgentAuth registry."""
 
     def __init__(
         self,
@@ -42,169 +19,89 @@ class AgentAuth:
     ):
         self.registry_url = registry_url.rstrip("/")
         self.config_dir = config_dir or DEFAULT_CONFIG_DIR
-        self.store = CredentialStore(config_dir=self.config_dir)
-        self._master_private: bytes | None = None
-        self._master_public: bytes | None = None
 
-    def _load_master_key(self):
-        """Load master key from disk, caching in memory."""
-        if self._master_private is None:
-            self._master_private, self._master_public = load_master_key(self.config_dir)
+    def _credentials_path(self, agent_name: str) -> Path:
+        creds_dir = self.config_dir / "credentials"
+        creds_dir.mkdir(parents=True, exist_ok=True)
+        return creds_dir / f"{agent_name}.json"
 
-    def _sign_request(self, body: bytes) -> dict[str, str]:
-        """Create auth headers for a signed request to the registry."""
-        self._load_master_key()
-        timestamp = datetime.now(UTC).isoformat()
-        message = f"{timestamp}\n".encode() + body
-        private_key = Ed25519PrivateKey.from_private_bytes(self._master_private)
-        signature = private_key.sign(message)
-        return {
-            "X-AgentAuth-PublicKey": self._master_public.hex(),
-            "X-AgentAuth-Signature": signature.hex(),
-            "X-AgentAuth-Timestamp": timestamp,
-            "Content-Type": "application/json",
-        }
+    def register(self, name: str, description: str | None = None) -> dict:
+        """Register a new agent. Returns response with api_key (shown once).
 
-    # --- Init ---
+        Also saves credentials to ~/.config/agentauth/credentials/<name>.json.
+        """
+        resp = httpx.post(
+            f"{self.registry_url}/v1/agents/register",
+            json={"name": name, "description": description},
+        )
+        resp.raise_for_status()
+        data = resp.json()
 
-    def init(self, label: str = "default") -> dict:
-        """One-time setup: generate master keypair and register with registry.
+        # Save credentials locally
+        path = self._credentials_path(name)
+        path.write_text(json.dumps({"name": name, "api_key": data["api_key"]}, indent=2))
+        path.chmod(0o600)
 
-        Returns:
-            Registry response with key_id and public_key.
+        return data
+
+    def load_credentials(self, agent_name: str) -> dict:
+        """Load saved credentials for an agent.
 
         Raises:
-            RuntimeError: If master key already exists.
+            FileNotFoundError: If agent is not registered locally.
         """
-        if master_key_exists(self.config_dir):
-            raise RuntimeError(
-                f"Master key already exists at {self.config_dir}. "
-                "Delete it first if you want to reinitialize."
+        path = self._credentials_path(agent_name)
+        if not path.exists():
+            raise FileNotFoundError(
+                f"No credentials found for agent '{agent_name}'. Register it first."
             )
+        return json.loads(path.read_text())
 
-        private_key, public_key = generate_master_key()
-        save_master_key(private_key, public_key, self.config_dir)
-        self._master_private = private_key
-        self._master_public = public_key
+    def get_api_key(self, agent_name: str) -> str:
+        """Get the API key for a registered agent."""
+        return self.load_credentials(agent_name)["api_key"]
 
-        # Register with the registry
-        resp = httpx.post(
-            f"{self.registry_url}/v1/keys",
-            json={"public_key": public_key.hex(), "label": label},
+    def auth_headers(self, agent_name: str) -> dict[str, str]:
+        """Get Authorization headers for an agent. Use with any HTTP client."""
+        api_key = self.get_api_key(agent_name)
+        return {"Authorization": f"Bearer {api_key}"}
+
+    def get_me(self, agent_name: str) -> dict:
+        """Fetch the agent's own profile from the registry."""
+        resp = httpx.get(
+            f"{self.registry_url}/v1/agents/me",
+            headers=self.auth_headers(agent_name),
         )
         resp.raise_for_status()
         return resp.json()
 
-    # --- Register agent ---
-
-    def register(
-        self,
-        agent_name: str,
-        description: str | None = None,
-    ) -> AgentCredentials:
-        """Register a new agent with the registry.
-
-        Derives an agent keypair from the master key, registers it with the
-        registry, and stores credentials locally.
-
-        Args:
-            agent_name: Globally unique agent name.
-            description: What this agent does.
-
-        Returns:
-            AgentCredentials stored on disk.
-        """
-        validate_agent_name(agent_name)
-        self._load_master_key()
-
-        if self.store.exists(agent_name):
-            raise RuntimeError(f"Agent '{agent_name}' is already registered locally.")
-
-        # Derive agent keypair
-        agent_private, agent_public = derive_agent_key(self._master_private, agent_name)
-
-        # Register with registry
-        payload = {
-            "agent_name": agent_name,
-            "agent_public_key": agent_public.hex(),
-            "master_public_key": self._master_public.hex(),
-            "description": description,
-        }
-        body = json.dumps(payload).encode()
-        headers = self._sign_request(body)
-
-        resp = httpx.post(
-            f"{self.registry_url}/v1/agents",
-            content=body,
-            headers=headers,
-        )
+    def get_agent(self, agent_name: str) -> dict:
+        """Look up any agent's public profile."""
+        resp = httpx.get(f"{self.registry_url}/v1/agents/{agent_name}")
         resp.raise_for_status()
+        return resp.json()
 
-        # Store credentials locally
-        creds = AgentCredentials(
-            agent_name=agent_name,
-            agent_public_key=agent_public.hex(),
-            master_public_key=self._master_public.hex(),
-            platform="agentauth",
-            credentials=Credentials(
-                platform="agentauth",
-                token=agent_private.hex(),  # Agent private key is the auth token
-            ),
-        )
-        self.store.save(creds)
-        return creds
-
-    # --- Authenticate ---
-
-    def authenticate(self, agent_name: str) -> dict[str, str]:
-        """Get authentication headers for an agent.
-
-        Verifies the agent exists in the registry and returns signed headers
-        that platforms can validate.
-
-        Args:
-            agent_name: Name of a registered agent.
-
-        Returns:
-            Dict with agent_name, agent_public_key, signature, and timestamp.
-            Platforms use this to verify the agent via the registry.
-        """
-        creds = self.store.load(agent_name)
-        agent_private = bytes.fromhex(creds.credentials.token)
-
-        # Create a signed auth payload
-        timestamp = datetime.now(UTC).isoformat()
-        message = f"{agent_name}:{timestamp}".encode()
-        signature = sign_message(agent_private, message)
-
-        return {
-            "agent_name": agent_name,
-            "agent_public_key": creds.agent_public_key,
-            "signature": signature.hex(),
-            "timestamp": timestamp,
-        }
-
-    # --- List / Revoke ---
-
-    def list_agents(self) -> list[AgentCredentials]:
+    def list_agents(self) -> list[dict]:
         """List all locally registered agents."""
-        return self.store.list_agents()
+        creds_dir = self.config_dir / "credentials"
+        if not creds_dir.exists():
+            return []
+        agents = []
+        for path in sorted(creds_dir.glob("*.json")):
+            agents.append(json.loads(path.read_text()))
+        return agents
 
     def revoke(self, agent_name: str) -> bool:
         """Revoke an agent from the registry and delete local credentials."""
-        self._load_master_key()
-
-        headers = self._sign_request(b"")
+        creds = self.load_credentials(agent_name)
         resp = httpx.delete(
             f"{self.registry_url}/v1/agents/{agent_name}",
-            headers=headers,
+            headers={"Authorization": f"Bearer {creds['api_key']}"},
         )
+        # Clean up local credentials regardless
+        self._credentials_path(agent_name).unlink(missing_ok=True)
 
-        if resp.status_code == 404:
-            # Already gone from registry, clean up local
-            self.store.delete(agent_name)
+        if resp.status_code == 403:
             return False
-
         resp.raise_for_status()
-        self.store.delete(agent_name)
         return True

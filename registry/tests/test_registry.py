@@ -1,15 +1,6 @@
-"""Tests for the AgentAuth registry API."""
-
-from datetime import UTC, datetime
+"""Tests for the AgentAuth registry API — flat identity model."""
 
 import pytest
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from cryptography.hazmat.primitives.serialization import (
-    Encoding,
-    NoEncryption,
-    PrivateFormat,
-    PublicFormat,
-)
 from fastapi.testclient import TestClient
 
 from registry.app.main import app
@@ -18,11 +9,8 @@ from registry.app.store import registry_store
 
 @pytest.fixture(autouse=True)
 def clean_store():
-    """Reset the registry store between tests."""
-    registry_store._keys.clear()
-    registry_store._keys_by_pub.clear()
     registry_store._agents.clear()
-    registry_store._agents_by_master.clear()
+    registry_store._keys.clear()
     yield
 
 
@@ -31,198 +19,65 @@ def client():
     return TestClient(app)
 
 
-def _generate_keypair() -> tuple[bytes, bytes]:
-    private_key = Ed25519PrivateKey.generate()
-    private_bytes = private_key.private_bytes(Encoding.Raw, PrivateFormat.Raw, NoEncryption())
-    public_bytes = private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
-    return private_bytes, public_bytes
+def _register(client, name="test_bot", description="A test agent"):
+    return client.post("/v1/agents/register", json={"name": name, "description": description})
 
 
-def _sign_request(private_key_bytes: bytes, body: bytes) -> dict:
-    """Create auth headers for a signed request."""
-    timestamp = datetime.now(UTC).isoformat()
-    message = f"{timestamp}\n".encode() + body
-    private_key = Ed25519PrivateKey.from_private_bytes(private_key_bytes)
-    signature = private_key.sign(message)
-    public_bytes = private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
-    return {
-        "X-AgentAuth-PublicKey": public_bytes.hex(),
-        "X-AgentAuth-Signature": signature.hex(),
-        "X-AgentAuth-Timestamp": timestamp,
-    }
-
-
-# --- Key endpoints ---
-
-
-def test_register_key(client):
-    _, public_key = _generate_keypair()
-    resp = client.post("/v1/keys", json={"public_key": public_key.hex(), "label": "test"})
-    assert resp.status_code == 201
-    data = resp.json()
-    assert data["public_key"] == public_key.hex()
-    assert data["key_id"].startswith("k_")
-    assert data["label"] == "test"
-
-
-def test_register_key_duplicate(client):
-    _, public_key = _generate_keypair()
-    client.post("/v1/keys", json={"public_key": public_key.hex()})
-    resp = client.post("/v1/keys", json={"public_key": public_key.hex()})
-    assert resp.status_code == 409
-
-
-def test_register_key_invalid_format(client):
-    resp = client.post("/v1/keys", json={"public_key": "not_hex"})
-    assert resp.status_code == 422
-
-
-def test_get_key_by_id(client):
-    _, public_key = _generate_keypair()
-    create_resp = client.post("/v1/keys", json={"public_key": public_key.hex()})
-    key_id = create_resp.json()["key_id"]
-
-    resp = client.get(f"/v1/keys/{key_id}")
-    assert resp.status_code == 200
-    assert resp.json()["public_key"] == public_key.hex()
-
-
-def test_get_key_by_public_key(client):
-    _, public_key = _generate_keypair()
-    client.post("/v1/keys", json={"public_key": public_key.hex()})
-
-    resp = client.get(f"/v1/keys?public_key={public_key.hex()}")
-    assert resp.status_code == 200
-    assert resp.json()["public_key"] == public_key.hex()
-
-
-def test_get_key_not_found(client):
-    resp = client.get("/v1/keys/k_nonexistent")
-    assert resp.status_code == 404
-
-
-def test_revoke_key(client):
-    private_key, public_key = _generate_keypair()
-    create_resp = client.post("/v1/keys", json={"public_key": public_key.hex()})
-    key_id = create_resp.json()["key_id"]
-
-    headers = _sign_request(private_key, b"")
-    resp = client.delete(f"/v1/keys/{key_id}", headers=headers)
-    assert resp.status_code == 200
-    assert resp.json()["revoked"] is True
-
-    # Key should be gone
-    assert client.get(f"/v1/keys/{key_id}").status_code == 404
-
-
-# --- Agent endpoints ---
+# --- Registration ---
 
 
 def test_register_agent(client):
-    private_key, public_key = _generate_keypair()
-    client.post("/v1/keys", json={"public_key": public_key.hex()})
-
-    import json as json_lib
-
-    body = json_lib.dumps({
-        "agent_name": "test_bot",
-        "agent_public_key": "aa" * 32,
-        "master_public_key": public_key.hex(),
-        "description": "A test agent",
-    }).encode()
-
-    headers = _sign_request(private_key, body)
-    headers["Content-Type"] = "application/json"
-    resp = client.post("/v1/agents", content=body, headers=headers)
+    resp = _register(client)
     assert resp.status_code == 201
     data = resp.json()
-    assert data["agent_name"] == "test_bot"
+    assert data["name"] == "test_bot"
+    assert data["api_key"].startswith("agentauth_")
     assert data["active"] is True
+    assert data["description"] == "A test agent"
 
 
-def test_register_agent_duplicate_name(client):
-    private_key, public_key = _generate_keypair()
-    client.post("/v1/keys", json={"public_key": public_key.hex()})
+def test_register_without_description(client):
+    resp = client.post("/v1/agents/register", json={"name": "minimal_bot"})
+    assert resp.status_code == 201
+    assert resp.json()["description"] is None
 
-    import json as json_lib
 
-    body = json_lib.dumps({
-        "agent_name": "taken_bot",
-        "agent_public_key": "aa" * 32,
-        "master_public_key": public_key.hex(),
-    }).encode()
-
-    headers = _sign_request(private_key, body)
-    headers["Content-Type"] = "application/json"
-    client.post("/v1/agents", content=body, headers=headers)
-
-    # Second registration with same name — new body/signature needed
-    body2 = json_lib.dumps({
-        "agent_name": "taken_bot",
-        "agent_public_key": "bb" * 32,
-        "master_public_key": public_key.hex(),
-    }).encode()
-    headers2 = _sign_request(private_key, body2)
-    headers2["Content-Type"] = "application/json"
-    resp = client.post("/v1/agents", content=body2, headers=headers2)
+def test_register_duplicate_name(client):
+    _register(client, "taken_bot")
+    resp = _register(client, "taken_bot")
     assert resp.status_code == 409
 
 
-def test_register_agent_unregistered_master(client):
-    private_key, public_key = _generate_keypair()
-
-    import json as json_lib
-
-    body = json_lib.dumps({
-        "agent_name": "orphan_bot",
-        "agent_public_key": "aa" * 32,
-        "master_public_key": public_key.hex(),
-    }).encode()
-
-    headers = _sign_request(private_key, body)
-    headers["Content-Type"] = "application/json"
-    resp = client.post("/v1/agents", content=body, headers=headers)
-    assert resp.status_code == 404
+def test_register_invalid_name_uppercase(client):
+    resp = _register(client, "BadName")
+    assert resp.status_code == 422
 
 
-def test_register_agent_wrong_signer(client):
-    _, public_key = _generate_keypair()
-    other_private, _ = _generate_keypair()
-    client.post("/v1/keys", json={"public_key": public_key.hex()})
+def test_register_invalid_name_too_short(client):
+    resp = _register(client, "a")
+    assert resp.status_code == 422
 
-    import json as json_lib
 
-    body = json_lib.dumps({
-        "agent_name": "sneaky_bot",
-        "agent_public_key": "aa" * 32,
-        "master_public_key": public_key.hex(),
-    }).encode()
+def test_register_invalid_name_starts_with_number(client):
+    resp = _register(client, "1bot")
+    assert resp.status_code == 422
 
-    # Sign with wrong key
-    headers = _sign_request(other_private, body)
-    headers["Content-Type"] = "application/json"
-    resp = client.post("/v1/agents", content=body, headers=headers)
-    assert resp.status_code == 403
+
+def test_register_invalid_name_hyphen(client):
+    resp = _register(client, "my-bot")
+    assert resp.status_code == 422
+
+
+# --- Lookup ---
 
 
 def test_get_agent(client):
-    private_key, public_key = _generate_keypair()
-    client.post("/v1/keys", json={"public_key": public_key.hex()})
-
-    import json as json_lib
-
-    body = json_lib.dumps({
-        "agent_name": "lookup_bot",
-        "agent_public_key": "cc" * 32,
-        "master_public_key": public_key.hex(),
-    }).encode()
-    headers = _sign_request(private_key, body)
-    headers["Content-Type"] = "application/json"
-    client.post("/v1/agents", content=body, headers=headers)
-
+    _register(client, "lookup_bot")
     resp = client.get("/v1/agents/lookup_bot")
     assert resp.status_code == 200
-    assert resp.json()["agent_name"] == "lookup_bot"
+    data = resp.json()
+    assert data["name"] == "lookup_bot"
+    assert data["api_key"] is None  # Never exposed on public lookup
 
 
 def test_get_agent_not_found(client):
@@ -230,78 +85,80 @@ def test_get_agent_not_found(client):
     assert resp.status_code == 404
 
 
-def test_list_agents_by_master(client):
-    private_key, public_key = _generate_keypair()
-    client.post("/v1/keys", json={"public_key": public_key.hex()})
-
-    import json as json_lib
-
-    for name in ["alpha_bot", "beta_bot"]:
-        body = json_lib.dumps({
-            "agent_name": name,
-            "agent_public_key": "dd" * 32,
-            "master_public_key": public_key.hex(),
-        }).encode()
-        headers = _sign_request(private_key, body)
-        headers["Content-Type"] = "application/json"
-        client.post("/v1/agents", content=body, headers=headers)
-
-    resp = client.get(f"/v1/agents?master_public_key={public_key.hex()}")
+def test_list_agents(client):
+    _register(client, "alpha_bot")
+    _register(client, "beta_bot")
+    resp = client.get("/v1/agents")
     assert resp.status_code == 200
     data = resp.json()
     assert data["count"] == 2
+    names = {a["name"] for a in data["agents"]}
+    assert names == {"alpha_bot", "beta_bot"}
+    # API keys never exposed
+    for agent in data["agents"]:
+        assert agent["api_key"] is None
+
+
+# --- Authentication ---
+
+
+def test_get_me(client):
+    resp = _register(client)
+    api_key = resp.json()["api_key"]
+
+    me_resp = client.get("/v1/agents/me", headers={"Authorization": f"Bearer {api_key}"})
+    assert me_resp.status_code == 200
+    assert me_resp.json()["name"] == "test_bot"
+
+
+def test_get_me_invalid_key(client):
+    resp = client.get("/v1/agents/me", headers={"Authorization": "Bearer agentauth_fake"})
+    assert resp.status_code == 401
+
+
+def test_get_me_missing_header(client):
+    resp = client.get("/v1/agents/me")
+    assert resp.status_code == 401
+
+
+# --- Revocation ---
 
 
 def test_revoke_agent(client):
-    private_key, public_key = _generate_keypair()
-    client.post("/v1/keys", json={"public_key": public_key.hex()})
+    resp = _register(client, "doomed_bot")
+    api_key = resp.json()["api_key"]
 
-    import json as json_lib
-
-    body = json_lib.dumps({
-        "agent_name": "doomed_bot",
-        "agent_public_key": "ee" * 32,
-        "master_public_key": public_key.hex(),
-    }).encode()
-    headers = _sign_request(private_key, body)
-    headers["Content-Type"] = "application/json"
-    client.post("/v1/agents", content=body, headers=headers)
-
-    del_headers = _sign_request(private_key, b"")
-    resp = client.delete("/v1/agents/doomed_bot", headers=del_headers)
-    assert resp.status_code == 200
-    assert resp.json()["revoked"] is True
+    del_resp = client.delete("/v1/agents/doomed_bot", headers={"Authorization": f"Bearer {api_key}"})
+    assert del_resp.status_code == 200
+    assert del_resp.json()["revoked"] is True
 
     # Should be gone
     assert client.get("/v1/agents/doomed_bot").status_code == 404
 
 
-def test_revoke_key_cascades_to_agents(client):
-    private_key, public_key = _generate_keypair()
-    create_resp = client.post("/v1/keys", json={"public_key": public_key.hex()})
-    key_id = create_resp.json()["key_id"]
-
-    import json as json_lib
-
-    for name in ["cascade_a", "cascade_b"]:
-        body = json_lib.dumps({
-            "agent_name": name,
-            "agent_public_key": "ff" * 32,
-            "master_public_key": public_key.hex(),
-        }).encode()
-        headers = _sign_request(private_key, body)
-        headers["Content-Type"] = "application/json"
-        client.post("/v1/agents", content=body, headers=headers)
-
-    del_headers = _sign_request(private_key, b"")
-    resp = client.delete(f"/v1/keys/{key_id}", headers=del_headers)
-    assert resp.json()["agents_revoked"] == 2
-
-    # Both agents should be gone
-    assert client.get("/v1/agents/cascade_a").status_code == 404
-    assert client.get("/v1/agents/cascade_b").status_code == 404
+def test_revoke_wrong_key(client):
+    _register(client, "protected_bot")
+    resp = client.delete("/v1/agents/protected_bot", headers={"Authorization": "Bearer agentauth_wrong"})
+    assert resp.status_code == 403
 
 
-def test_missing_auth_headers(client):
-    resp = client.delete("/v1/keys/k_something")
+def test_revoke_missing_auth(client):
+    _register(client, "safe_bot")
+    resp = client.delete("/v1/agents/safe_bot")
     assert resp.status_code == 401
+
+
+# --- Skill page ---
+
+
+def test_skill_page_root(client):
+    resp = client.get("/")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "text/markdown; charset=utf-8"
+    assert "AgentAuth" in resp.text
+
+
+def test_skill_page_md(client):
+    resp = client.get("/skill.md")
+    assert resp.status_code == 200
+    assert "curl" in resp.text
