@@ -3,7 +3,7 @@
 ## Done (v0.1)
 
 - [x] Flat agent identity (name + API key)
-- [x] Registry API (FastAPI, in-memory store)
+- [x] Registry API (FastAPI)
 - [x] Python SDK client (register, verify, revoke)
 - [x] CLI (register, list, me, revoke)
 - [x] Skill.md instruction page (curl-first)
@@ -12,12 +12,13 @@
 - [x] Email support in SDK — `register(email=...)` and `link_email()`
 - [x] Link email endpoint — `POST /v1/agents/me/email` for post-registration email linking
 - [x] 55 tests (29 registry + 15 SDK + 11 AgentBoard)
+- [x] JWT proof tokens — API key never leaves agent-registry relationship
+- [x] JWKS endpoint for local token verification
+- [x] Persistent database — SQLite with bcrypt-hashed API keys, persistent signing key, WAL mode
 
 ---
 
 ## Registry
-
-- [ ] **Persistent database** — replace in-memory store with SQLite or PostgreSQL
 - [ ] **Rate limiting** — per-IP and per-agent request throttling
 - [ ] **Email sender** — send actual verification emails (currently prints URL to console)
 - [ ] **Domain-linked identity (Tier 3)** — DKIM-style DNS TXT record verification

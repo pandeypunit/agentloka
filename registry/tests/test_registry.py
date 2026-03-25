@@ -60,6 +60,9 @@ def test_register_agent(client):
     assert data["active"] is True
     assert data["verified"] is False
     assert data["description"] == "A test agent"
+    assert data["important"] is not None
+    assert "SAVE" in data["important"]
+    assert "NEVER" in data["important"]
 
 
 def test_register_proof_token_works_immediately(client):

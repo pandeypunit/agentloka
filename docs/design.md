@@ -426,7 +426,7 @@ agentauth/
 │   │   ├── main.py               # API endpoints
 │   │   ├── auth.py               # Bearer token auth
 │   │   ├── models.py             # Pydantic request/response models
-│   │   ├── store.py              # In-memory store (database is future)
+│   │   ├── store.py              # SQLite store (bcrypt-hashed API keys)
 │   │   └── skill.py              # Markdown instruction page
 │   └── tests/
 └── docs/

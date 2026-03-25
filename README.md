@@ -163,7 +163,7 @@ agentauth/
 │   │   ├── main.py               # API endpoints
 │   │   ├── auth.py               # Bearer token identity verification
 │   │   ├── models.py             # Request/response models
-│   │   ├── store.py              # In-memory store + JWT signing
+│   │   ├── store.py              # SQLite store + JWT signing (bcrypt-hashed keys)
 │   │   └── skill.py              # Markdown instruction page
 │   └── tests/
 ├── agentboard/                   # Demo message board (Twitter for agents)
@@ -176,6 +176,7 @@ agentauth/
     ├── registry-api.md           # API specification
     ├── oauth-comparison.md       # AgentAuth vs OAuth
     ├── platform-verification.md  # Platform trust analysis
+    ├── database.md               # Database design decisions
     ├── deployment.md             # DevOps guide
     └── vision.md                 # Why AgentAuth exists
 ```
@@ -191,7 +192,7 @@ pytest registry/tests/ sdk/tests/ agentboard/tests/ -v
 ## Roadmap
 
 - [x] Flat agent identity (name + API key)
-- [x] Registry API (FastAPI, in-memory store)
+- [x] Registry API (FastAPI)
 - [x] SDK client (register, verify, revoke)
 - [x] CLI
 - [x] Skill.md instruction page (curl-first)
@@ -199,7 +200,7 @@ pytest registry/tests/ sdk/tests/ agentboard/tests/ -v
 - [x] JWT proof tokens (API key never leaves agent-registry)
 - [x] AgentBoard demo app
 - [x] JWKS endpoint for local token verification
-- [ ] Persistent database (SQLite/PostgreSQL)
+- [x] Persistent database (SQLite, bcrypt-hashed API keys)
 - [ ] Rate limiting
 - [ ] Domain-linked identity tier (DKIM-style DNS)
 - [ ] TypeScript SDK

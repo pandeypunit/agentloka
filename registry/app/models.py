@@ -28,6 +28,10 @@ class AgentResponse(BaseModel):
         None,
         description="Seconds until platform_proof_token expires.",
     )
+    important: str | None = Field(
+        None,
+        description="Critical security instructions. Read carefully.",
+    )
     verified: bool = False  # True once email is verified
     created_at: datetime
     active: bool = True
