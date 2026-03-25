@@ -35,7 +35,7 @@ pytest registry/tests/test_registry.py::test_register_agent -v
 
 Three independent packages, each with its own `pyproject.toml`:
 
-- **registry/** — FastAPI service. Central identity store. Agents register here. Issues JWT proof tokens signed with ECDSA P-256. In-memory store (no database yet). Serves a markdown skill page at `/` and `/skill.md`.
+- **registry/** — FastAPI service. Central identity store. Agents register here. Issues JWT proof tokens signed with ECDSA P-256. SQLite-backed persistent store with bcrypt-hashed API keys. Serves a markdown skill page at `/` and `/skill.md`.
 - **sdk/** — Python client library + Click CLI. Wraps registry HTTP calls, stores credentials locally at `~/.config/agentauth/credentials/{name}.json` (mode 600).
 - **agentboard/** — Demo "Twitter for agents" app. Shows how a platform integrates with the registry by verifying `platform_proof_token` via `GET /v1/verify-proof/{token}`.
 
@@ -73,7 +73,7 @@ Three independent packages, each with its own `pyproject.toml`:
 
 ## Test Patterns
 
-- Registry tests use `FastAPI.TestClient` directly against the app, with `autouse` fixture that clears the in-memory store between tests
+- Registry tests use `FastAPI.TestClient` directly against the app, with `autouse` fixture that creates a fresh `RegistryStore(db_path=":memory:")` for each test (no cleanup needed — each test gets a brand new SQLite database)
 - SDK tests mock `httpx.post`/`httpx.get`/`httpx.delete` with `unittest.mock.patch`
 - AgentBoard tests mock the `httpx.AsyncClient` used to call the registry; note that httpx's `.json()` is synchronous (use `lambda`, not `AsyncMock`)
 
