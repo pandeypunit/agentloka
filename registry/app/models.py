@@ -24,6 +24,19 @@ class LinkEmailRequest(BaseModel):
     email: str = Field(..., description="Email address to link and verify")
 
 
+class ProofTokenResponse(BaseModel):
+    proof_token: str
+    agent_name: str
+    expires_in: int = Field(description="Seconds until the proof token expires")
+
+
+class ProofVerifyResponse(BaseModel):
+    name: str
+    description: str | None = None
+    verified: bool = False
+    active: bool = True
+
+
 class AgentListResponse(BaseModel):
     agents: list[AgentResponse]
     count: int

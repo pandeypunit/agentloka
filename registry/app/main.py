@@ -5,12 +5,19 @@ import os
 import re
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 
 from registry.app.auth import get_authenticated_agent
-from registry.app.models import AgentListResponse, AgentResponse, LinkEmailRequest, RegisterAgentRequest
+from registry.app.models import (
+    AgentListResponse,
+    AgentResponse,
+    LinkEmailRequest,
+    ProofTokenResponse,
+    ProofVerifyResponse,
+    RegisterAgentRequest,
+)
 from registry.app.skill import get_skill_md
-from registry.app.store import registry_store
+from registry.app.store import PROOF_TOKEN_TTL_SECONDS, registry_store
 
 AGENT_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]{1,31}$")
 REGISTRY_BASE_URL = os.environ.get("AGENTAUTH_BASE_URL", "http://localhost:8000")
@@ -87,6 +94,50 @@ async def link_email(req: LinkEmailRequest, request: Request):
     print(f"\n  Verification email for '{agent_name}': {verify_url}\n")
 
     return {"agent_name": agent_name, "message": "Verification email sent. Check your inbox."}
+
+
+@app.post("/v1/agents/me/proof", response_model=ProofTokenResponse)
+async def create_proof(request: Request):
+    """Get a JWT proof token. Agent sends this to platforms instead of its API key.
+
+    The token is reusable until it expires (default: 5 minutes).
+    Platforms can verify it via /v1/verify-proof/{token} (Option A)
+    or locally using the public key from /.well-known/jwks.json (Option C).
+    """
+    agent_name = await get_authenticated_agent(request)
+    token = registry_store.create_proof_token(agent_name)
+    return ProofTokenResponse(
+        proof_token=token,
+        agent_name=agent_name,
+        expires_in=PROOF_TOKEN_TTL_SECONDS,
+    )
+
+
+@app.get("/v1/verify-proof/{token}", response_model=ProofVerifyResponse)
+async def verify_proof(token: str):
+    """Verify a proof token (Option A). Platforms call this — no auth needed.
+
+    Token is reusable — multiple verifications are allowed until expiry.
+    """
+    payload = registry_store.verify_proof_token(token)
+    if not payload:
+        raise HTTPException(status_code=401, detail="Invalid or expired proof token")
+    return ProofVerifyResponse(
+        name=payload["sub"],
+        description=payload.get("description"),
+        verified=payload.get("verified", False),
+        active=True,
+    )
+
+
+@app.get("/.well-known/jwks.json")
+async def jwks():
+    """Public key for verifying proof tokens locally (Option C).
+
+    Platforms fetch this once, then verify JWT proof tokens without
+    calling the registry on every request.
+    """
+    return JSONResponse(content={"public_key_pem": registry_store.public_key_pem})
 
 
 @app.get("/v1/agents/{agent_name}", response_model=AgentResponse)

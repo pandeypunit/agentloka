@@ -23,13 +23,14 @@ def client():
 
 
 def _mock_registry_success(agent_name="test_bot", description="A test agent"):
-    """Create a mock that simulates a successful registry verification."""
+    """Create a mock that simulates a successful proof token verification."""
     mock_response = AsyncMock()
     mock_response.status_code = 200
     # httpx .json() is sync, not async
     mock_response.json = lambda: {
         "name": agent_name,
         "description": description,
+        "verified": False,
         "active": True,
     }
 
@@ -41,7 +42,7 @@ def _mock_registry_success(agent_name="test_bot", description="A test agent"):
 
 
 def _mock_registry_failure():
-    """Create a mock that simulates a failed registry verification."""
+    """Create a mock that simulates a failed proof token verification."""
     mock_response = AsyncMock()
     mock_response.status_code = 401
 
@@ -78,7 +79,7 @@ def test_create_post(mock_async_client, client):
     resp = client.post(
         "/v1/posts",
         json={"message": "Hello from test_bot!"},
-        headers={"Authorization": "Bearer agentauth_test123"},
+        headers={"Authorization": "Bearer proof_test123"},
     )
     assert resp.status_code == 201
     data = resp.json()
@@ -95,12 +96,12 @@ def test_create_post_increments_id(mock_async_client, client):
     client.post(
         "/v1/posts",
         json={"message": "First"},
-        headers={"Authorization": "Bearer agentauth_test123"},
+        headers={"Authorization": "Bearer proof_test123"},
     )
     resp = client.post(
         "/v1/posts",
         json={"message": "Second"},
-        headers={"Authorization": "Bearer agentauth_test123"},
+        headers={"Authorization": "Bearer proof_test123"},
     )
     assert resp.json()["id"] == 2
 
@@ -117,7 +118,7 @@ def test_create_post_invalid_key(mock_async_client, client):
     resp = client.post(
         "/v1/posts",
         json={"message": "Bad key"},
-        headers={"Authorization": "Bearer agentauth_fake"},
+        headers={"Authorization": "Bearer proof_fake"},
     )
     assert resp.status_code == 401
     assert "not verified" in resp.json()["detail"]
@@ -130,7 +131,7 @@ def test_create_post_too_long(mock_async_client, client):
     resp = client.post(
         "/v1/posts",
         json={"message": "x" * 281},
-        headers={"Authorization": "Bearer agentauth_test123"},
+        headers={"Authorization": "Bearer proof_test123"},
     )
     assert resp.status_code == 422
 
@@ -145,12 +146,12 @@ def test_list_posts(mock_async_client, client):
     client.post(
         "/v1/posts",
         json={"message": "First post"},
-        headers={"Authorization": "Bearer agentauth_test123"},
+        headers={"Authorization": "Bearer proof_test123"},
     )
     client.post(
         "/v1/posts",
         json={"message": "Second post"},
-        headers={"Authorization": "Bearer agentauth_test123"},
+        headers={"Authorization": "Bearer proof_test123"},
     )
 
     resp = client.get("/v1/posts")
@@ -178,14 +179,14 @@ def test_list_agent_posts(mock_async_client, client):
     client.post(
         "/v1/posts",
         json={"message": "Alpha says hi"},
-        headers={"Authorization": "Bearer agentauth_alpha"},
+        headers={"Authorization": "Bearer proof_alpha"},
     )
 
     mock_async_client.return_value = _mock_registry_success("beta_bot")
     client.post(
         "/v1/posts",
         json={"message": "Beta says hi"},
-        headers={"Authorization": "Bearer agentauth_beta"},
+        headers={"Authorization": "Bearer proof_beta"},
     )
 
     resp = client.get("/v1/posts/alpha_bot")

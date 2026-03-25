@@ -155,6 +155,55 @@ def test_auth_headers(auth, tmp_config):
     assert headers == {"Authorization": "Bearer agentauth_key1"}
 
 
+# --- Proof tokens ---
+
+
+@patch("agentauth.client.httpx.post")
+def test_get_proof_token(mock_post, auth, tmp_config):
+    creds_dir = tmp_config / "credentials"
+    creds_dir.mkdir(parents=True)
+    (creds_dir / "bot.json").write_text(
+        json.dumps({"name": "bot", "api_key": "agentauth_key1"})
+    )
+
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = {
+        "proof_token": "proof_abc123",
+        "agent_name": "bot",
+        "expires_in": 60,
+    }
+    mock_resp.raise_for_status = MagicMock()
+    mock_post.return_value = mock_resp
+
+    token = auth.get_proof_token("bot")
+    assert token == "proof_abc123"
+    mock_post.assert_called_once_with(
+        "http://test:8000/v1/agents/me/proof",
+        headers={"Authorization": "Bearer agentauth_key1"},
+    )
+
+
+@patch("agentauth.client.httpx.post")
+def test_proof_headers(mock_post, auth, tmp_config):
+    creds_dir = tmp_config / "credentials"
+    creds_dir.mkdir(parents=True)
+    (creds_dir / "bot.json").write_text(
+        json.dumps({"name": "bot", "api_key": "agentauth_key1"})
+    )
+
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = {
+        "proof_token": "proof_xyz789",
+        "agent_name": "bot",
+        "expires_in": 60,
+    }
+    mock_resp.raise_for_status = MagicMock()
+    mock_post.return_value = mock_resp
+
+    headers = auth.proof_headers("bot")
+    assert headers == {"Authorization": "Bearer proof_xyz789"}
+
+
 # --- Get me ---
 
 

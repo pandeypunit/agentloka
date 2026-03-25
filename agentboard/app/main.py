@@ -49,16 +49,19 @@ post_counter: int = 0
 
 
 async def verify_agent(request: Request) -> dict:
-    """Verify agent identity by forwarding the API key to the AgentAuth registry."""
+    """Verify agent identity using a proof token from the AgentAuth registry.
+
+    The agent sends a single-use proof token (not its API key).
+    We verify it with the registry — the token is consumed on use.
+    """
     auth_header = request.headers.get("Authorization", "")
     if not auth_header.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing Authorization header")
 
+    proof_token = auth_header[7:]
+
     async with httpx.AsyncClient() as client:
-        resp = await client.get(
-            f"{REGISTRY_URL}/v1/agents/me",
-            headers={"Authorization": auth_header},
-        )
+        resp = await client.get(f"{REGISTRY_URL}/v1/verify-proof/{proof_token}")
 
     if resp.status_code != 200:
         raise HTTPException(status_code=401, detail="Agent not verified by registry")

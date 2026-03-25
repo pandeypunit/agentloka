@@ -284,6 +284,118 @@ def test_revoke_cleans_up_email(client):
     assert "cleanup_bot" not in registry_store._emails
 
 
+# --- Proof tokens (JWT) ---
+
+
+def test_create_proof_token(client):
+    resp = _register(client)
+    api_key = resp.json()["api_key"]
+
+    proof_resp = client.post("/v1/agents/me/proof", headers={"Authorization": f"Bearer {api_key}"})
+    assert proof_resp.status_code == 200
+    data = proof_resp.json()
+    assert data["proof_token"]  # JWT string
+    assert data["agent_name"] == "test_bot"
+    assert data["expires_in"] == 300
+
+
+def test_verify_proof_token(client):
+    resp = _register(client)
+    api_key = resp.json()["api_key"]
+
+    proof_resp = client.post("/v1/agents/me/proof", headers={"Authorization": f"Bearer {api_key}"})
+    proof_token = proof_resp.json()["proof_token"]
+
+    verify_resp = client.get(f"/v1/verify-proof/{proof_token}")
+    assert verify_resp.status_code == 200
+    data = verify_resp.json()
+    assert data["name"] == "test_bot"
+    assert data["active"] is True
+
+
+def test_proof_token_reusable(client):
+    resp = _register(client)
+    api_key = resp.json()["api_key"]
+
+    proof_resp = client.post("/v1/agents/me/proof", headers={"Authorization": f"Bearer {api_key}"})
+    proof_token = proof_resp.json()["proof_token"]
+
+    # Can be used multiple times (not single-use)
+    assert client.get(f"/v1/verify-proof/{proof_token}").status_code == 200
+    assert client.get(f"/v1/verify-proof/{proof_token}").status_code == 200
+
+
+def test_proof_token_invalid(client):
+    resp = client.get("/v1/verify-proof/bogus_token")
+    assert resp.status_code == 401
+
+
+def test_proof_token_missing_auth(client):
+    resp = client.post("/v1/agents/me/proof")
+    assert resp.status_code == 401
+
+
+def test_proof_token_expired(client):
+    import jwt as pyjwt
+
+    resp = _register(client)
+    api_key = resp.json()["api_key"]
+
+    # Create an expired JWT manually
+    expired_payload = {
+        "sub": "test_bot",
+        "description": "A test agent",
+        "verified": False,
+        "iat": 1000000,
+        "exp": 1000001,  # expired long ago
+    }
+    expired_token = pyjwt.encode(expired_payload, registry_store._signing_key, algorithm="ES256")
+
+    assert client.get(f"/v1/verify-proof/{expired_token}").status_code == 401
+
+
+def test_proof_token_after_agent_revoked(client):
+    resp = _register(client)
+    api_key = resp.json()["api_key"]
+
+    proof_resp = client.post("/v1/agents/me/proof", headers={"Authorization": f"Bearer {api_key}"})
+    proof_token = proof_resp.json()["proof_token"]
+
+    # Revoke the agent
+    client.delete("/v1/agents/test_bot", headers={"Authorization": f"Bearer {api_key}"})
+
+    # Proof token should fail — agent no longer exists
+    assert client.get(f"/v1/verify-proof/{proof_token}").status_code == 401
+
+
+def test_jwks_endpoint(client):
+    resp = client.get("/.well-known/jwks.json")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "public_key_pem" in data
+    assert "BEGIN PUBLIC KEY" in data["public_key_pem"]
+
+
+def test_verify_proof_locally_with_public_key(client):
+    import jwt as pyjwt
+
+    resp = _register(client)
+    api_key = resp.json()["api_key"]
+
+    # Get proof token
+    proof_resp = client.post("/v1/agents/me/proof", headers={"Authorization": f"Bearer {api_key}"})
+    proof_token = proof_resp.json()["proof_token"]
+
+    # Get public key
+    jwks_resp = client.get("/.well-known/jwks.json")
+    public_key_pem = jwks_resp.json()["public_key_pem"]
+
+    # Verify locally (Option C) — no registry call needed
+    payload = pyjwt.decode(proof_token, public_key_pem, algorithms=["ES256"])
+    assert payload["sub"] == "test_bot"
+    assert "exp" in payload
+
+
 # --- Skill page ---
 
 

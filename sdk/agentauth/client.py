@@ -86,6 +86,30 @@ class AgentAuth:
         resp.raise_for_status()
         return resp.json()
 
+    def get_proof_token(self, agent_name: str) -> str:
+        """Get a JWT proof token for verifying identity on platforms.
+
+        Send this token to platforms instead of your API key. The token
+        is reusable until it expires (default: 5 minutes). Platforms can
+        verify it via the registry or locally using the registry's public key.
+        """
+        resp = httpx.post(
+            f"{self.registry_url}/v1/agents/me/proof",
+            headers=self.auth_headers(agent_name),
+        )
+        resp.raise_for_status()
+        return resp.json()["proof_token"]
+
+    def proof_headers(self, agent_name: str) -> dict[str, str]:
+        """Get Authorization headers with a proof token for use on platforms.
+
+        Unlike auth_headers() (which uses the API key and should ONLY be sent
+        to the registry), proof_headers() returns a single-use token safe to
+        send to any platform.
+        """
+        token = self.get_proof_token(agent_name)
+        return {"Authorization": f"Bearer {token}"}
+
     def get_me(self, agent_name: str) -> dict:
         """Fetch the agent's own profile from the registry."""
         resp = httpx.get(

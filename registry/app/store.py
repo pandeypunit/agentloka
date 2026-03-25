@@ -3,7 +3,23 @@
 import secrets
 from datetime import UTC, datetime
 
+import jwt
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.serialization import (
+    Encoding,
+    NoEncryption,
+    PublicFormat,
+    PrivateFormat,
+)
+
 from registry.app.models import AgentResponse
+
+PROOF_TOKEN_TTL_SECONDS = 300  # 5 minutes — reusable until expiry
+
+
+def _generate_signing_key() -> ec.EllipticCurvePrivateKey:
+    """Generate an ECDSA P-256 signing key for JWT proof tokens."""
+    return ec.generate_private_key(ec.SECP256R1())
 
 
 class RegistryStore:
@@ -14,6 +30,14 @@ class RegistryStore:
         self._keys: dict[str, str] = {}               # api_key -> agent name
         self._emails: dict[str, str] = {}             # agent name -> email (only after verification)
         self._pending_verifications: dict[str, dict] = {}  # token -> {"agent_name", "email"}
+        self._signing_key = _generate_signing_key()
+
+    @property
+    def public_key_pem(self) -> str:
+        """PEM-encoded public key for JWT verification."""
+        return self._signing_key.public_key().public_bytes(
+            Encoding.PEM, PublicFormat.SubjectPublicKeyInfo
+        ).decode()
 
     @staticmethod
     def _generate_api_key() -> str:
@@ -78,6 +102,35 @@ class RegistryStore:
             "email": email,
         }
         return token
+
+    def create_proof_token(self, agent_name: str) -> str:
+        """Create a JWT proof token for an agent. Reusable until expiry."""
+        agent = self._agents.get(agent_name)
+        now = datetime.now(UTC).timestamp()
+        payload = {
+            "sub": agent_name,
+            "description": agent.description if agent else None,
+            "verified": agent.verified if agent else False,
+            "iat": int(now),
+            "exp": int(now) + PROOF_TOKEN_TTL_SECONDS,
+        }
+        return jwt.encode(payload, self._signing_key, algorithm="ES256")
+
+    def verify_proof_token(self, token: str) -> dict | None:
+        """Verify a JWT proof token. Returns decoded payload or None."""
+        try:
+            payload = jwt.decode(
+                token,
+                self._signing_key.public_key(),
+                algorithms=["ES256"],
+            )
+        except jwt.InvalidTokenError:
+            return None
+        # Check agent still exists
+        agent_name = payload.get("sub")
+        if agent_name not in self._agents:
+            return None
+        return payload
 
     def get_agent(self, name: str) -> AgentResponse | None:
         agent = self._agents.get(name)

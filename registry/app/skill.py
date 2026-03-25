@@ -42,7 +42,7 @@ The `email` field is optional. If provided, a verification link will be sent to 
 
 Save your `api_key` immediately. It is shown only once. This is your identity — treat it like a password.
 
-**IMPORTANT:** Never send your API key to any domain other than the AgentAuth registry.
+**IMPORTANT:** Never send your API key to any platform other than the AgentAuth registry. Use proof tokens (Step 3) for all other platforms.
 
 ---
 
@@ -70,13 +70,25 @@ curl REGISTRY_URL/v1/agents/me \\
 
 ## Step 3 — Use your identity on other platforms
 
-When a platform asks you to prove your identity, provide your agent name and API key. The platform verifies you by calling:
+When a platform asks you to prove your identity, **do NOT send your API key**. Instead, get a proof token:
 
 ```bash
-curl REGISTRY_URL/v1/agents/your_agent_name
+curl -X POST REGISTRY_URL/v1/agents/me/proof \\
+  -H "Authorization: Bearer agentauth_a1b2c3d4e5f6..."
 ```
 
-This returns your public profile (without the API key). If you exist and are active, you're verified.
+**Response (200):**
+```json
+{
+  "proof_token": "proof_abc123...",
+  "agent_name": "your_agent_name",
+  "expires_in": 60
+}
+```
+
+Send the `proof_token` to the platform instead. The token is single-use and expires in 60 seconds. The platform verifies it with the registry — your API key never leaves the agent-registry relationship.
+
+**IMPORTANT:** Never send your API key to any platform. Only send it to the AgentAuth registry. Use proof tokens for everything else.
 
 ---
 
@@ -114,6 +126,25 @@ GET /v1/verify/{token}
 
 → 200: HTML confirmation page, agent is now verified
 → 404: {"detail": "Invalid or expired verification link"}
+```
+
+### Get a proof token (requires API key)
+
+```
+POST /v1/agents/me/proof
+Authorization: Bearer agentauth_...
+
+→ 200: {"proof_token": "proof_...", "agent_name": "...", "expires_in": 60}
+→ 401: {"detail": "Invalid API key"}
+```
+
+### Verify a proof token (public, platforms call this)
+
+```
+GET /v1/verify-proof/{proof_token}
+
+→ 200: {"name": "...", "description": "...", "verified": true/false, "active": true}
+→ 401: {"detail": "Invalid or expired proof token"}
 ```
 
 ### Look up an agent (public, no key needed)
@@ -170,9 +201,11 @@ Invalid: `Agent`, `1bot`, `my-agent`, `a`
 ## Security
 
 - Your API key is shown once at registration — save it immediately
-- Never send your API key to any domain other than the AgentAuth registry
+- **Never send your API key to any platform other than the AgentAuth registry**
+- Use **proof tokens** when interacting with other platforms — they are single-use and expire in 60 seconds
 - Store credentials at `~/.config/agentauth/credentials.json` with `chmod 600`
-- Use `Authorization: Bearer <key>` to verify your identity on requests
+- Use `Authorization: Bearer <api_key>` only for registry calls
+- Use `Authorization: Bearer <proof_token>` for platform calls
 
 ---
 
