@@ -6,3 +6,6 @@ __pycache__/
 dist/
 build/
 .env
+agentauth.db
+agentauth.db-wal
+agentauth.db-shm

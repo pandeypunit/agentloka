@@ -4,21 +4,34 @@ import pytest
 from fastapi.testclient import TestClient
 
 from registry.app.main import app
-from registry.app.store import registry_store
+from registry.app.store import RegistryStore, registry_store
 
 
 @pytest.fixture(autouse=True)
 def clean_store():
-    registry_store._agents.clear()
-    registry_store._keys.clear()
-    registry_store._emails.clear()
-    registry_store._pending_verifications.clear()
+    """Give each test a fresh in-memory database."""
+    import registry.app.store as store_module
+    import registry.app.auth as auth_module
+    import registry.app.main as main_module
+
+    fresh = RegistryStore(db_path=":memory:")
+    store_module.registry_store = fresh
+    auth_module.registry_store = fresh
+    main_module.registry_store = fresh
     yield
+    return fresh
 
 
 @pytest.fixture
 def client():
     return TestClient(app)
+
+
+@pytest.fixture
+def store():
+    """Return the current test's store instance."""
+    import registry.app.store as store_module
+    return store_module.registry_store
 
 
 def _register(client, name="test_bot", description="A test agent", email=None):
@@ -94,35 +107,29 @@ def test_register_invalid_name_hyphen(client):
 # --- Email Verification ---
 
 
-def test_register_with_email_not_verified_yet(client):
+def test_register_with_email_not_verified_yet(client, store):
     resp = _register(client, "email_bot", email="bot@example.com")
     assert resp.status_code == 201
     data = resp.json()
     assert data["verified"] is False
-    # A pending verification should exist
-    assert len(registry_store._pending_verifications) == 1
+    assert store.count_pending_verifications() == 1
 
 
-def test_verify_email(client):
+def test_verify_email(client, store):
     _register(client, "verify_bot", email="verify@example.com")
 
-    # Get the verification token
-    token = list(registry_store._pending_verifications.keys())[0]
+    token = store.get_pending_verification_token("verify_bot")
+    assert token is not None
 
-    # Click the verification link
     resp = client.get(f"/v1/verify/{token}")
     assert resp.status_code == 200
     assert "verify_bot" in resp.text
 
-    # Agent should now be verified
     agent = client.get("/v1/agents/verify_bot").json()
     assert agent["verified"] is True
 
-    # Email stored internally
-    assert registry_store._emails["verify_bot"] == "verify@example.com"
-
-    # Token consumed — can't reuse
-    assert len(registry_store._pending_verifications) == 0
+    assert store.get_verified_email("verify_bot") == "verify@example.com"
+    assert store.count_pending_verifications() == 0
 
 
 def test_verify_invalid_token(client):
@@ -130,9 +137,9 @@ def test_verify_invalid_token(client):
     assert resp.status_code == 404
 
 
-def test_verify_token_consumed_once(client):
+def test_verify_token_consumed_once(client, store):
     _register(client, "once_bot", email="once@example.com")
-    token = list(registry_store._pending_verifications.keys())[0]
+    token = store.get_pending_verification_token("once_bot")
 
     resp1 = client.get(f"/v1/verify/{token}")
     assert resp1.status_code == 200
@@ -141,24 +148,24 @@ def test_verify_token_consumed_once(client):
     assert resp2.status_code == 404
 
 
-def test_register_without_email_no_pending(client):
+def test_register_without_email_no_pending(client, store):
     _register(client, "no_email_bot")
-    assert len(registry_store._pending_verifications) == 0
+    assert store.count_pending_verifications() == 0
 
 
-def test_email_not_exposed_publicly(client):
+def test_email_not_exposed_publicly(client, store):
     _register(client, "private_bot", email="private@example.com")
-    token = list(registry_store._pending_verifications.keys())[0]
+    token = store.get_pending_verification_token("private_bot")
     client.get(f"/v1/verify/{token}")
 
     agent = client.get("/v1/agents/private_bot").json()
     assert "email" not in agent
 
 
-def test_verified_status_in_list(client):
+def test_verified_status_in_list(client, store):
     _register(client, "unverified_bot")
     _register(client, "verified_bot", email="v@example.com")
-    token = list(registry_store._pending_verifications.keys())[0]
+    token = store.get_pending_verification_token("verified_bot")
     client.get(f"/v1/verify/{token}")
 
     resp = client.get("/v1/agents")
@@ -170,14 +177,12 @@ def test_verified_status_in_list(client):
 # --- Link email (post-registration) ---
 
 
-def test_link_email_after_registration(client):
+def test_link_email_after_registration(client, store):
     resp = _register(client, "late_email_bot")
     api_key = _api_key(resp)
 
-    # Agent starts unverified
     assert client.get("/v1/agents/late_email_bot").json()["verified"] is False
 
-    # Link email
     link_resp = client.post(
         "/v1/agents/me/email",
         json={"email": "late@example.com"},
@@ -186,14 +191,12 @@ def test_link_email_after_registration(client):
     assert link_resp.status_code == 200
     assert link_resp.json()["agent_name"] == "late_email_bot"
 
-    # Verify via token
-    token = list(registry_store._pending_verifications.keys())[0]
+    token = store.get_pending_verification_token("late_email_bot")
     client.get(f"/v1/verify/{token}")
 
-    # Now verified
     agent = client.get("/v1/agents/late_email_bot").json()
     assert agent["verified"] is True
-    assert registry_store._emails["late_email_bot"] == "late@example.com"
+    assert store.get_verified_email("late_email_bot") == "late@example.com"
 
 
 def test_link_email_missing_auth(client):
@@ -236,7 +239,6 @@ def test_list_agents(client):
     assert data["count"] == 2
     names = {a["name"] for a in data["agents"]}
     assert names == {"alpha_bot", "beta_bot"}
-    # Secret keys never exposed
     for agent in data["agents"]:
         assert agent["registry_secret_key"] is None
 
@@ -274,7 +276,6 @@ def test_revoke_agent(client):
     assert del_resp.status_code == 200
     assert del_resp.json()["revoked"] is True
 
-    # Should be gone
     assert client.get("/v1/agents/doomed_bot").status_code == 404
 
 
@@ -290,15 +291,15 @@ def test_revoke_missing_auth(client):
     assert resp.status_code == 401
 
 
-def test_revoke_cleans_up_email(client):
-    _register(client, "cleanup_bot", email="cleanup@example.com")
-    token = list(registry_store._pending_verifications.keys())[0]
+def test_revoke_cleans_up_email(client, store):
+    resp = _register(client, "cleanup_bot", email="cleanup@example.com")
+    api_key = _api_key(resp)
+    token = store.get_pending_verification_token("cleanup_bot")
     client.get(f"/v1/verify/{token}")
-    assert "cleanup_bot" in registry_store._emails
+    assert store.get_verified_email("cleanup_bot") == "cleanup@example.com"
 
-    api_key = registry_store._agents["cleanup_bot"].registry_secret_key
     client.delete("/v1/agents/cleanup_bot", headers={"Authorization": f"Bearer {api_key}"})
-    assert "cleanup_bot" not in registry_store._emails
+    assert store.get_verified_email("cleanup_bot") is None
 
 
 # --- Proof tokens (JWT) ---
@@ -337,7 +338,6 @@ def test_proof_token_reusable(client):
     proof_resp = client.post("/v1/agents/me/proof", headers={"Authorization": f"Bearer {api_key}"})
     proof_token = proof_resp.json()["platform_proof_token"]
 
-    # Can be used multiple times (not single-use)
     assert client.get(f"/v1/verify-proof/{proof_token}").status_code == 200
     assert client.get(f"/v1/verify-proof/{proof_token}").status_code == 200
 
@@ -352,20 +352,19 @@ def test_proof_token_missing_auth(client):
     assert resp.status_code == 401
 
 
-def test_proof_token_expired(client):
+def test_proof_token_expired(client, store):
     import jwt as pyjwt
 
-    resp = _register(client)
+    _register(client)
 
-    # Create an expired JWT manually
     expired_payload = {
         "sub": "test_bot",
         "description": "A test agent",
         "verified": False,
         "iat": 1000000,
-        "exp": 1000001,  # expired long ago
+        "exp": 1000001,
     }
-    expired_token = pyjwt.encode(expired_payload, registry_store._signing_key, algorithm="ES256")
+    expired_token = pyjwt.encode(expired_payload, store._signing_key, algorithm="ES256")
 
     assert client.get(f"/v1/verify-proof/{expired_token}").status_code == 401
 
@@ -377,10 +376,8 @@ def test_proof_token_after_agent_revoked(client):
     proof_resp = client.post("/v1/agents/me/proof", headers={"Authorization": f"Bearer {api_key}"})
     proof_token = proof_resp.json()["platform_proof_token"]
 
-    # Revoke the agent
     client.delete("/v1/agents/test_bot", headers={"Authorization": f"Bearer {api_key}"})
 
-    # Proof token should fail — agent no longer exists
     assert client.get(f"/v1/verify-proof/{proof_token}").status_code == 401
 
 
@@ -397,14 +394,11 @@ def test_verify_proof_locally_with_public_key(client):
 
     resp = _register(client)
 
-    # Get proof token from registration response
     proof_token = resp.json()["platform_proof_token"]
 
-    # Get public key
     jwks_resp = client.get("/.well-known/jwks.json")
     public_key_pem = jwks_resp.json()["public_key_pem"]
 
-    # Verify locally (Option C) — no registry call needed
     payload = pyjwt.decode(proof_token, public_key_pem, algorithms=["ES256"])
     assert payload["sub"] == "test_bot"
     assert "exp" in payload
