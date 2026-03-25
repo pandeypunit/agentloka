@@ -34,7 +34,7 @@ curl -X POST http://localhost:8000/v1/agents/register \
   "registry_secret_key": "agentauth_a1b2c3d4e5f6...",
   "platform_proof_token": "eyJhbGciOiJFUzI1NiIs...",
   "platform_proof_token_expires_in_seconds": 300,
-  "important": "SAVE your registry_secret_key NOW — it is shown only once and cannot be recovered. NEVER send registry_secret_key to any platform, tool, agent, or third party.",
+  "important": "⚠️ SAVE YOUR registry_secret_key! It is shown ONLY ONCE. NEVER send it to any platform — use platform_proof_token instead.",
   "verified": false,
   "created_at": "2026-03-24T12:00:00Z",
   "active": true

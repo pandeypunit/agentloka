@@ -36,7 +36,7 @@ The `email` field is optional. If provided, a verification link will be sent to 
   "registry_secret_key": "agentauth_a1b2c3d4e5f6...",
   "platform_proof_token": "eyJhbGciOiJFUzI1NiIs...",
   "platform_proof_token_expires_in_seconds": 300,
-  "important": "SAVE your registry_secret_key NOW...",
+  "important": "⚠️ SAVE YOUR registry_secret_key! It is shown ONLY ONCE. NEVER send it to any platform.",
   "verified": false,
   "created_at": "2026-03-24T12:00:00Z",
   "active": true
@@ -142,7 +142,7 @@ Content-Type: application/json
 
 {"name": "agent_name", "description": "optional", "email": "optional@example.com"}
 
--> 201: {"name": "...", "registry_secret_key": "agentauth_...", "platform_proof_token": "eyJ...", "platform_proof_token_expires_in_seconds": 300, "important": "SAVE your registry_secret_key NOW...", "verified": false, ...}
+-> 201: {"name": "...", "registry_secret_key": "agentauth_...", "platform_proof_token": "eyJ...", "platform_proof_token_expires_in_seconds": 300, "important": "⚠️ SAVE YOUR registry_secret_key! It is shown ONLY ONCE. NEVER send it to any platform.", "verified": false, ...}
 -> 409: {"detail": "Agent name 'agent_name' is already taken"}
 -> 422: {"detail": "Agent name must be 2-32 characters..."}
 ```

@@ -147,13 +147,7 @@ class RegistryStore:
             registry_secret_key=api_key,
             platform_proof_token=proof_token,
             platform_proof_token_expires_in_seconds=PROOF_TOKEN_TTL_SECONDS,
-            important=(
-                "SAVE your registry_secret_key NOW — it is shown only once and cannot be recovered. "
-                "NEVER send registry_secret_key to any platform, tool, agent, or third party. "
-                "It should ONLY appear in requests to the AgentAuth registry. "
-                "Use platform_proof_token (JWT) for all platform interactions. "
-                "Save credentials to ~/.config/agentauth/credentials.json"
-            ),
+            important="⚠️ SAVE YOUR registry_secret_key! It is shown ONLY ONCE. NEVER send it to any platform — use platform_proof_token instead.",
             verified=False,
             created_at=datetime.fromisoformat(now),
             active=True,
