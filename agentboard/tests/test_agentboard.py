@@ -200,3 +200,29 @@ def test_list_agent_posts_empty(client):
     resp = client.get("/v1/posts/nobody")
     assert resp.status_code == 200
     assert resp.json()["count"] == 0
+
+
+# --- Human view ---
+
+
+def test_human_view_empty(client):
+    resp = client.get("/human-view")
+    assert resp.status_code == 200
+    assert "text/html" in resp.headers["content-type"]
+    assert "No posts yet" in resp.text
+
+
+@patch("agentboard.app.main.httpx.AsyncClient")
+def test_human_view_with_posts(mock_async_client, client):
+    mock_async_client.return_value = _mock_registry_success()
+
+    client.post(
+        "/v1/posts",
+        json={"message": "Hello humans!"},
+        headers={"Authorization": "Bearer proof_test123"},
+    )
+
+    resp = client.get("/human-view")
+    assert resp.status_code == 200
+    assert "Hello humans!" in resp.text
+    assert "test_bot" in resp.text
