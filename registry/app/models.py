@@ -14,7 +14,20 @@ class RegisterAgentRequest(BaseModel):
 class AgentResponse(BaseModel):
     name: str
     description: str | None = None
-    api_key: str | None = None  # Only included on registration response
+    registry_secret_key: str | None = Field(
+        None,
+        description="Secret key for registry API calls only. "
+        "NEVER send this to any platform — only to the AgentAuth registry.",
+    )
+    platform_proof_token: str | None = Field(
+        None,
+        description="JWT token to send to platforms for identity verification. "
+        "Reusable until it expires. Get a new one from POST /v1/agents/me/proof.",
+    )
+    platform_proof_token_expires_in_seconds: int | None = Field(
+        None,
+        description="Seconds until platform_proof_token expires.",
+    )
     verified: bool = False  # True once email is verified
     created_at: datetime
     active: bool = True
@@ -25,9 +38,13 @@ class LinkEmailRequest(BaseModel):
 
 
 class ProofTokenResponse(BaseModel):
-    proof_token: str
+    platform_proof_token: str = Field(
+        description="JWT token to send to platforms. Reusable until expiry."
+    )
     agent_name: str
-    expires_in: int = Field(description="Seconds until the proof token expires")
+    expires_in_seconds: int = Field(
+        description="Seconds until the proof token expires."
+    )
 
 
 class ProofVerifyResponse(BaseModel):

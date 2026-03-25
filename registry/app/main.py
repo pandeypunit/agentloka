@@ -107,9 +107,9 @@ async def create_proof(request: Request):
     agent_name = await get_authenticated_agent(request)
     token = registry_store.create_proof_token(agent_name)
     return ProofTokenResponse(
-        proof_token=token,
+        platform_proof_token=token,
         agent_name=agent_name,
-        expires_in=PROOF_TOKEN_TTL_SECONDS,
+        expires_in_seconds=PROOF_TOKEN_TTL_SECONDS,
     )
 
 

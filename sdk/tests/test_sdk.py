@@ -36,7 +36,9 @@ def test_register_saves_credentials(mock_post, auth, tmp_config):
     mock_resp = MagicMock()
     mock_resp.json.return_value = {
         "name": "test_bot",
-        "api_key": "agentauth_abc123",
+        "registry_secret_key": "agentauth_abc123",
+        "platform_proof_token": "eyJhbGci...",
+        "platform_proof_token_expires_in_seconds": 300,
         "active": True,
     }
     mock_resp.raise_for_status = MagicMock()
@@ -44,7 +46,9 @@ def test_register_saves_credentials(mock_post, auth, tmp_config):
 
     result = auth.register("test_bot", description="A bot")
 
-    assert result["api_key"] == "agentauth_abc123"
+    assert result["registry_secret_key"] == "agentauth_abc123"
+    assert result["platform_proof_token"] == "eyJhbGci..."
+    assert result["platform_proof_token_expires_in_seconds"] == 300
     mock_post.assert_called_once_with(
         "http://test:8000/v1/agents/register",
         json={"name": "test_bot", "description": "A bot"},
@@ -55,7 +59,7 @@ def test_register_saves_credentials(mock_post, auth, tmp_config):
     assert creds_file.exists()
     saved = json.loads(creds_file.read_text())
     assert saved["name"] == "test_bot"
-    assert saved["api_key"] == "agentauth_abc123"
+    assert saved["registry_secret_key"] == "agentauth_abc123"
 
     # File permissions
     assert oct(creds_file.stat().st_mode)[-3:] == "600"
@@ -66,7 +70,9 @@ def test_register_with_email(mock_post, auth, tmp_config):
     mock_resp = MagicMock()
     mock_resp.json.return_value = {
         "name": "email_bot",
-        "api_key": "agentauth_abc123",
+        "registry_secret_key": "agentauth_abc123",
+        "platform_proof_token": "eyJhbGci...",
+        "platform_proof_token_expires_in_seconds": 300,
         "verified": False,
         "active": True,
     }
@@ -91,7 +97,7 @@ def test_link_email(mock_post, auth, tmp_config):
     creds_dir = tmp_config / "credentials"
     creds_dir.mkdir(parents=True)
     (creds_dir / "bot.json").write_text(
-        json.dumps({"name": "bot", "api_key": "agentauth_key1"})
+        json.dumps({"name": "bot", "registry_secret_key": "agentauth_key1"})
     )
 
     mock_resp = MagicMock()
@@ -119,10 +125,10 @@ def test_load_credentials(auth, tmp_config):
     creds_dir = tmp_config / "credentials"
     creds_dir.mkdir(parents=True)
     creds_file = creds_dir / "my_bot.json"
-    creds_file.write_text(json.dumps({"name": "my_bot", "api_key": "agentauth_xyz"}))
+    creds_file.write_text(json.dumps({"name": "my_bot", "registry_secret_key": "agentauth_xyz"}))
 
     creds = auth.load_credentials("my_bot")
-    assert creds["api_key"] == "agentauth_xyz"
+    assert creds["registry_secret_key"] == "agentauth_xyz"
 
 
 def test_load_credentials_not_found(auth):
@@ -130,28 +136,28 @@ def test_load_credentials_not_found(auth):
         auth.load_credentials("ghost_bot")
 
 
-# --- Get API key ---
+# --- Get registry secret key ---
 
 
-def test_get_api_key(auth, tmp_config):
+def test_get_registry_secret_key(auth, tmp_config):
     creds_dir = tmp_config / "credentials"
     creds_dir.mkdir(parents=True)
     (creds_dir / "bot.json").write_text(
-        json.dumps({"name": "bot", "api_key": "agentauth_key1"})
+        json.dumps({"name": "bot", "registry_secret_key": "agentauth_key1"})
     )
-    assert auth.get_api_key("bot") == "agentauth_key1"
+    assert auth.get_registry_secret_key("bot") == "agentauth_key1"
 
 
 # --- Auth headers ---
 
 
-def test_auth_headers(auth, tmp_config):
+def test_registry_auth_headers(auth, tmp_config):
     creds_dir = tmp_config / "credentials"
     creds_dir.mkdir(parents=True)
     (creds_dir / "bot.json").write_text(
-        json.dumps({"name": "bot", "api_key": "agentauth_key1"})
+        json.dumps({"name": "bot", "registry_secret_key": "agentauth_key1"})
     )
-    headers = auth.auth_headers("bot")
+    headers = auth.registry_auth_headers("bot")
     assert headers == {"Authorization": "Bearer agentauth_key1"}
 
 
@@ -159,24 +165,24 @@ def test_auth_headers(auth, tmp_config):
 
 
 @patch("agentauth.client.httpx.post")
-def test_get_proof_token(mock_post, auth, tmp_config):
+def test_get_platform_proof_token(mock_post, auth, tmp_config):
     creds_dir = tmp_config / "credentials"
     creds_dir.mkdir(parents=True)
     (creds_dir / "bot.json").write_text(
-        json.dumps({"name": "bot", "api_key": "agentauth_key1"})
+        json.dumps({"name": "bot", "registry_secret_key": "agentauth_key1"})
     )
 
     mock_resp = MagicMock()
     mock_resp.json.return_value = {
-        "proof_token": "proof_abc123",
+        "platform_proof_token": "eyJhbGci_abc123",
         "agent_name": "bot",
-        "expires_in": 60,
+        "expires_in_seconds": 300,
     }
     mock_resp.raise_for_status = MagicMock()
     mock_post.return_value = mock_resp
 
-    token = auth.get_proof_token("bot")
-    assert token == "proof_abc123"
+    token = auth.get_platform_proof_token("bot")
+    assert token == "eyJhbGci_abc123"
     mock_post.assert_called_once_with(
         "http://test:8000/v1/agents/me/proof",
         headers={"Authorization": "Bearer agentauth_key1"},
@@ -184,24 +190,24 @@ def test_get_proof_token(mock_post, auth, tmp_config):
 
 
 @patch("agentauth.client.httpx.post")
-def test_proof_headers(mock_post, auth, tmp_config):
+def test_platform_proof_headers(mock_post, auth, tmp_config):
     creds_dir = tmp_config / "credentials"
     creds_dir.mkdir(parents=True)
     (creds_dir / "bot.json").write_text(
-        json.dumps({"name": "bot", "api_key": "agentauth_key1"})
+        json.dumps({"name": "bot", "registry_secret_key": "agentauth_key1"})
     )
 
     mock_resp = MagicMock()
     mock_resp.json.return_value = {
-        "proof_token": "proof_xyz789",
+        "platform_proof_token": "eyJhbGci_xyz789",
         "agent_name": "bot",
-        "expires_in": 60,
+        "expires_in_seconds": 300,
     }
     mock_resp.raise_for_status = MagicMock()
     mock_post.return_value = mock_resp
 
-    headers = auth.proof_headers("bot")
-    assert headers == {"Authorization": "Bearer proof_xyz789"}
+    headers = auth.platform_proof_headers("bot")
+    assert headers == {"Authorization": "Bearer eyJhbGci_xyz789"}
 
 
 # --- Get me ---
@@ -212,7 +218,7 @@ def test_get_me(mock_get, auth, tmp_config):
     creds_dir = tmp_config / "credentials"
     creds_dir.mkdir(parents=True)
     (creds_dir / "bot.json").write_text(
-        json.dumps({"name": "bot", "api_key": "agentauth_key1"})
+        json.dumps({"name": "bot", "registry_secret_key": "agentauth_key1"})
     )
 
     mock_resp = MagicMock()
@@ -254,10 +260,10 @@ def test_list_agents(auth, tmp_config):
     creds_dir = tmp_config / "credentials"
     creds_dir.mkdir(parents=True)
     (creds_dir / "alpha.json").write_text(
-        json.dumps({"name": "alpha", "api_key": "agentauth_a"})
+        json.dumps({"name": "alpha", "registry_secret_key": "agentauth_a"})
     )
     (creds_dir / "beta.json").write_text(
-        json.dumps({"name": "beta", "api_key": "agentauth_b"})
+        json.dumps({"name": "beta", "registry_secret_key": "agentauth_b"})
     )
 
     agents = auth.list_agents()
@@ -274,7 +280,7 @@ def test_revoke_success(mock_delete, auth, tmp_config):
     creds_dir = tmp_config / "credentials"
     creds_dir.mkdir(parents=True)
     creds_file = creds_dir / "bot.json"
-    creds_file.write_text(json.dumps({"name": "bot", "api_key": "agentauth_key1"}))
+    creds_file.write_text(json.dumps({"name": "bot", "registry_secret_key": "agentauth_key1"}))
 
     mock_resp = MagicMock()
     mock_resp.status_code = 200
@@ -290,7 +296,7 @@ def test_revoke_wrong_key(mock_delete, auth, tmp_config):
     creds_dir = tmp_config / "credentials"
     creds_dir.mkdir(parents=True)
     creds_file = creds_dir / "bot.json"
-    creds_file.write_text(json.dumps({"name": "bot", "api_key": "agentauth_wrong"}))
+    creds_file.write_text(json.dumps({"name": "bot", "registry_secret_key": "agentauth_wrong"}))
 
     mock_resp = MagicMock()
     mock_resp.status_code = 403

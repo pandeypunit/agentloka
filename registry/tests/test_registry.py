@@ -28,6 +28,11 @@ def _register(client, name="test_bot", description="A test agent", email=None):
     return client.post("/v1/agents/register", json=payload)
 
 
+def _api_key(resp):
+    """Extract registry_secret_key from registration response."""
+    return resp.json()["registry_secret_key"]
+
+
 # --- Registration ---
 
 
@@ -36,10 +41,22 @@ def test_register_agent(client):
     assert resp.status_code == 201
     data = resp.json()
     assert data["name"] == "test_bot"
-    assert data["api_key"].startswith("agentauth_")
+    assert data["registry_secret_key"].startswith("agentauth_")
+    assert data["platform_proof_token"]  # JWT included
+    assert data["platform_proof_token_expires_in_seconds"] == 300
     assert data["active"] is True
     assert data["verified"] is False
     assert data["description"] == "A test agent"
+
+
+def test_register_proof_token_works_immediately(client):
+    """Agent can use the proof token from registration without an extra call."""
+    resp = _register(client)
+    proof_token = resp.json()["platform_proof_token"]
+
+    verify_resp = client.get(f"/v1/verify-proof/{proof_token}")
+    assert verify_resp.status_code == 200
+    assert verify_resp.json()["name"] == "test_bot"
 
 
 def test_register_without_description(client):
@@ -155,7 +172,7 @@ def test_verified_status_in_list(client):
 
 def test_link_email_after_registration(client):
     resp = _register(client, "late_email_bot")
-    api_key = resp.json()["api_key"]
+    api_key = _api_key(resp)
 
     # Agent starts unverified
     assert client.get("/v1/agents/late_email_bot").json()["verified"] is False
@@ -202,7 +219,7 @@ def test_get_agent(client):
     assert resp.status_code == 200
     data = resp.json()
     assert data["name"] == "lookup_bot"
-    assert data["api_key"] is None  # Never exposed on public lookup
+    assert data["registry_secret_key"] is None  # Never exposed on public lookup
 
 
 def test_get_agent_not_found(client):
@@ -219,9 +236,9 @@ def test_list_agents(client):
     assert data["count"] == 2
     names = {a["name"] for a in data["agents"]}
     assert names == {"alpha_bot", "beta_bot"}
-    # API keys never exposed
+    # Secret keys never exposed
     for agent in data["agents"]:
-        assert agent["api_key"] is None
+        assert agent["registry_secret_key"] is None
 
 
 # --- Identity Verification ---
@@ -229,7 +246,7 @@ def test_list_agents(client):
 
 def test_get_me(client):
     resp = _register(client)
-    api_key = resp.json()["api_key"]
+    api_key = _api_key(resp)
 
     me_resp = client.get("/v1/agents/me", headers={"Authorization": f"Bearer {api_key}"})
     assert me_resp.status_code == 200
@@ -251,7 +268,7 @@ def test_get_me_missing_header(client):
 
 def test_revoke_agent(client):
     resp = _register(client, "doomed_bot")
-    api_key = resp.json()["api_key"]
+    api_key = _api_key(resp)
 
     del_resp = client.delete("/v1/agents/doomed_bot", headers={"Authorization": f"Bearer {api_key}"})
     assert del_resp.status_code == 200
@@ -279,7 +296,7 @@ def test_revoke_cleans_up_email(client):
     client.get(f"/v1/verify/{token}")
     assert "cleanup_bot" in registry_store._emails
 
-    api_key = registry_store._agents["cleanup_bot"].api_key
+    api_key = registry_store._agents["cleanup_bot"].registry_secret_key
     client.delete("/v1/agents/cleanup_bot", headers={"Authorization": f"Bearer {api_key}"})
     assert "cleanup_bot" not in registry_store._emails
 
@@ -289,22 +306,22 @@ def test_revoke_cleans_up_email(client):
 
 def test_create_proof_token(client):
     resp = _register(client)
-    api_key = resp.json()["api_key"]
+    api_key = _api_key(resp)
 
     proof_resp = client.post("/v1/agents/me/proof", headers={"Authorization": f"Bearer {api_key}"})
     assert proof_resp.status_code == 200
     data = proof_resp.json()
-    assert data["proof_token"]  # JWT string
+    assert data["platform_proof_token"]  # JWT string
     assert data["agent_name"] == "test_bot"
-    assert data["expires_in"] == 300
+    assert data["expires_in_seconds"] == 300
 
 
 def test_verify_proof_token(client):
     resp = _register(client)
-    api_key = resp.json()["api_key"]
+    api_key = _api_key(resp)
 
     proof_resp = client.post("/v1/agents/me/proof", headers={"Authorization": f"Bearer {api_key}"})
-    proof_token = proof_resp.json()["proof_token"]
+    proof_token = proof_resp.json()["platform_proof_token"]
 
     verify_resp = client.get(f"/v1/verify-proof/{proof_token}")
     assert verify_resp.status_code == 200
@@ -315,10 +332,10 @@ def test_verify_proof_token(client):
 
 def test_proof_token_reusable(client):
     resp = _register(client)
-    api_key = resp.json()["api_key"]
+    api_key = _api_key(resp)
 
     proof_resp = client.post("/v1/agents/me/proof", headers={"Authorization": f"Bearer {api_key}"})
-    proof_token = proof_resp.json()["proof_token"]
+    proof_token = proof_resp.json()["platform_proof_token"]
 
     # Can be used multiple times (not single-use)
     assert client.get(f"/v1/verify-proof/{proof_token}").status_code == 200
@@ -339,7 +356,6 @@ def test_proof_token_expired(client):
     import jwt as pyjwt
 
     resp = _register(client)
-    api_key = resp.json()["api_key"]
 
     # Create an expired JWT manually
     expired_payload = {
@@ -356,10 +372,10 @@ def test_proof_token_expired(client):
 
 def test_proof_token_after_agent_revoked(client):
     resp = _register(client)
-    api_key = resp.json()["api_key"]
+    api_key = _api_key(resp)
 
     proof_resp = client.post("/v1/agents/me/proof", headers={"Authorization": f"Bearer {api_key}"})
-    proof_token = proof_resp.json()["proof_token"]
+    proof_token = proof_resp.json()["platform_proof_token"]
 
     # Revoke the agent
     client.delete("/v1/agents/test_bot", headers={"Authorization": f"Bearer {api_key}"})
@@ -380,11 +396,9 @@ def test_verify_proof_locally_with_public_key(client):
     import jwt as pyjwt
 
     resp = _register(client)
-    api_key = resp.json()["api_key"]
 
-    # Get proof token
-    proof_resp = client.post("/v1/agents/me/proof", headers={"Authorization": f"Bearer {api_key}"})
-    proof_token = proof_resp.json()["proof_token"]
+    # Get proof token from registration response
+    proof_token = resp.json()["platform_proof_token"]
 
     # Get public key
     jwks_resp = client.get("/.well-known/jwks.json")

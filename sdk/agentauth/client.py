@@ -26,12 +26,17 @@ class AgentAuth:
         return creds_dir / f"{agent_name}.json"
 
     def register(self, name: str, description: str | None = None, email: str | None = None) -> dict:
-        """Register a new agent. Returns response with api_key (shown once).
+        """Register a new agent.
+
+        Returns response with:
+        - registry_secret_key: ONLY for registry API calls, never send to platforms
+        - platform_proof_token: JWT to send to platforms, reusable until expiry
+        - platform_proof_token_expires_in_seconds: seconds until proof token expires
 
         If email is provided, a verification link will be generated.
         Once verified, the agent becomes Tier 2 (email-linked).
 
-        Also saves credentials to ~/.config/agentauth/credentials/<name>.json.
+        Saves credentials to ~/.config/agentauth/credentials/<name>.json.
         """
         payload = {"name": name, "description": description}
         if email is not None:
@@ -45,7 +50,10 @@ class AgentAuth:
 
         # Save credentials locally
         path = self._credentials_path(name)
-        path.write_text(json.dumps({"name": name, "api_key": data["api_key"]}, indent=2))
+        path.write_text(json.dumps({
+            "name": name,
+            "registry_secret_key": data["registry_secret_key"],
+        }, indent=2))
         path.chmod(0o600)
 
         return data
@@ -63,14 +71,17 @@ class AgentAuth:
             )
         return json.loads(path.read_text())
 
-    def get_api_key(self, agent_name: str) -> str:
-        """Get the API key for a registered agent."""
-        return self.load_credentials(agent_name)["api_key"]
+    def get_registry_secret_key(self, agent_name: str) -> str:
+        """Get the registry secret key for an agent. ONLY for registry API calls."""
+        return self.load_credentials(agent_name)["registry_secret_key"]
 
-    def auth_headers(self, agent_name: str) -> dict[str, str]:
-        """Get Authorization headers for an agent. Use with any HTTP client."""
-        api_key = self.get_api_key(agent_name)
-        return {"Authorization": f"Bearer {api_key}"}
+    def registry_auth_headers(self, agent_name: str) -> dict[str, str]:
+        """Get Authorization headers for registry API calls ONLY.
+
+        NEVER send these headers to platforms — use platform_proof_headers() instead.
+        """
+        key = self.get_registry_secret_key(agent_name)
+        return {"Authorization": f"Bearer {key}"}
 
     def link_email(self, agent_name: str, email: str) -> dict:
         """Link an email to an already-registered agent. Triggers verification.
@@ -81,40 +92,39 @@ class AgentAuth:
         resp = httpx.post(
             f"{self.registry_url}/v1/agents/me/email",
             json={"email": email},
-            headers=self.auth_headers(agent_name),
+            headers=self.registry_auth_headers(agent_name),
         )
         resp.raise_for_status()
         return resp.json()
 
-    def get_proof_token(self, agent_name: str) -> str:
+    def get_platform_proof_token(self, agent_name: str) -> str:
         """Get a JWT proof token for verifying identity on platforms.
 
-        Send this token to platforms instead of your API key. The token
-        is reusable until it expires (default: 5 minutes). Platforms can
-        verify it via the registry or locally using the registry's public key.
+        Send this token to platforms instead of your registry secret key.
+        The token is reusable until it expires (default: 5 minutes).
+        Platforms verify it via the registry or locally using the public key.
         """
         resp = httpx.post(
             f"{self.registry_url}/v1/agents/me/proof",
-            headers=self.auth_headers(agent_name),
+            headers=self.registry_auth_headers(agent_name),
         )
         resp.raise_for_status()
-        return resp.json()["proof_token"]
+        return resp.json()["platform_proof_token"]
 
-    def proof_headers(self, agent_name: str) -> dict[str, str]:
+    def platform_proof_headers(self, agent_name: str) -> dict[str, str]:
         """Get Authorization headers with a proof token for use on platforms.
 
-        Unlike auth_headers() (which uses the API key and should ONLY be sent
-        to the registry), proof_headers() returns a single-use token safe to
-        send to any platform.
+        Safe to send to any platform. The proof token is reusable until
+        it expires (default: 5 minutes).
         """
-        token = self.get_proof_token(agent_name)
+        token = self.get_platform_proof_token(agent_name)
         return {"Authorization": f"Bearer {token}"}
 
     def get_me(self, agent_name: str) -> dict:
         """Fetch the agent's own profile from the registry."""
         resp = httpx.get(
             f"{self.registry_url}/v1/agents/me",
-            headers=self.auth_headers(agent_name),
+            headers=self.registry_auth_headers(agent_name),
         )
         resp.raise_for_status()
         return resp.json()
@@ -140,7 +150,7 @@ class AgentAuth:
         creds = self.load_credentials(agent_name)
         resp = httpx.delete(
             f"{self.registry_url}/v1/agents/{agent_name}",
-            headers={"Authorization": f"Bearer {creds['api_key']}"},
+            headers={"Authorization": f"Bearer {creds['registry_secret_key']}"},
         )
         # Clean up local credentials regardless
         self._credentials_path(agent_name).unlink(missing_ok=True)

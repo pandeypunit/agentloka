@@ -4,17 +4,16 @@ The identity layer for AI agents. Register and verify agent identity — no huma
 
 ## What is AgentAuth?
 
-AgentAuth is a simple registration and identity verification system for AI agents. An agent registers with a name and description, gets an API key, and includes it with requests to prove identity. No passwords, no sessions, no browser — just `curl`.
+AgentAuth is a registration and identity verification system for AI agents. An agent registers with a name, gets a `registry_secret_key` and a `platform_proof_token`. The secret key is used only for registry calls. The proof token is sent to platforms to prove identity — it's a JWT that's reusable for 5 minutes.
 
 Think of it like phone numbers for agents: a single registry where agents get a unique identity that any platform can verify.
 
 ## How It Works
 
-1. Agent registers → gets an API key (shown once)
-2. Agent proves identity with `Authorization: Bearer agentauth_xxxxx`
-3. Platforms verify agents by looking them up on the registry
-
-No master keys, no crypto derivation, no human claim step. Simple and flat.
+1. Agent registers → gets `registry_secret_key` (save it, shown once) + `platform_proof_token` (JWT, 5 min TTL)
+2. Agent sends `platform_proof_token` to platforms via `Authorization: Bearer <token>`
+3. Platform verifies the token with the registry (or locally using the registry's public key)
+4. Agent's `registry_secret_key` never leaves the agent-registry relationship
 
 ## Quick Start
 
@@ -32,17 +31,26 @@ curl -X POST http://localhost:8000/v1/agents/register \
 {
   "name": "my_bot",
   "description": "My first agent",
-  "api_key": "agentauth_a1b2c3d4e5f6...",
+  "registry_secret_key": "agentauth_a1b2c3d4e5f6...",
+  "platform_proof_token": "eyJhbGciOiJFUzI1NiIs...",
+  "platform_proof_token_expires_in_seconds": 300,
+  "verified": false,
   "created_at": "2026-03-24T12:00:00Z",
   "active": true
 }
 ```
 
-Save the `api_key` — it is shown only once.
+Save the `registry_secret_key` — it is shown only once. **Never send it to platforms.**
 
 **Verify your identity:**
 ```bash
 curl http://localhost:8000/v1/agents/me \
+  -H "Authorization: Bearer agentauth_a1b2c3d4e5f6..."
+```
+
+**Get a fresh proof token (when the previous one expires):**
+```bash
+curl -X POST http://localhost:8000/v1/agents/me/proof \
   -H "Authorization: Bearer agentauth_a1b2c3d4e5f6..."
 ```
 
@@ -62,16 +70,20 @@ from agentauth import AgentAuth
 
 auth = AgentAuth(registry_url="http://localhost:8000")
 
-# Register
+# Register — returns registry_secret_key + platform_proof_token
 result = auth.register("my_bot", description="My first agent")
-print(result["api_key"])  # Save this!
+print(result["registry_secret_key"])       # Save this! Only for registry.
+print(result["platform_proof_token"])      # Send this to platforms.
+
+# Get proof headers for platform API calls
+headers = auth.platform_proof_headers("my_bot")
+# → {"Authorization": "Bearer eyJhbGci..."}
+
+# Registry auth headers (ONLY for registry calls)
+headers = auth.registry_auth_headers("my_bot")
 
 # Verify identity
 me = auth.get_me("my_bot")
-
-# Auth headers for any HTTP client
-headers = auth.auth_headers("my_bot")
-# → {"Authorization": "Bearer agentauth_..."}
 
 # List locally registered agents
 agents = auth.list_agents()
@@ -119,18 +131,23 @@ Invalid: `Agent`, `1bot`, `my-agent`, `a`
 
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
-| `POST` | `/v1/agents/register` | None | Register a new agent |
-| `GET` | `/v1/agents/me` | Bearer | Get your own profile |
+| `POST` | `/v1/agents/register` | None | Register — returns `registry_secret_key` + `platform_proof_token` |
+| `POST` | `/v1/agents/me/proof` | `registry_secret_key` | Get a fresh `platform_proof_token` (5 min TTL) |
+| `GET` | `/v1/verify-proof/{token}` | None | Verify a proof token (platforms call this) |
+| `GET` | `/.well-known/jwks.json` | None | Public key for local JWT verification |
+| `GET` | `/v1/agents/me` | `registry_secret_key` | Get your own profile |
+| `POST` | `/v1/agents/me/email` | `registry_secret_key` | Link email for Tier 2 verification |
 | `GET` | `/v1/agents/{name}` | None | Look up any agent (public) |
 | `GET` | `/v1/agents` | None | List all agents (public) |
-| `DELETE` | `/v1/agents/{name}` | Bearer | Revoke your agent |
+| `DELETE` | `/v1/agents/{name}` | `registry_secret_key` | Revoke your agent |
 
 ## Security
 
-- API key is shown once at registration — save it immediately
-- Never send your API key to any domain other than the AgentAuth registry
+- `registry_secret_key` is shown once at registration — save it immediately
+- **Never send `registry_secret_key` to any platform** — only to the AgentAuth registry
+- Use `platform_proof_token` for all platform interactions (reusable, 5 min TTL)
 - Credentials stored at `~/.config/agentauth/credentials/<name>.json` with `600` permissions
-- Use `Authorization: Bearer <key>` to prove your identity on requests
+- Proof tokens are signed JWTs (ECDSA P-256) — platforms can verify locally
 
 ## Project Structure
 
@@ -146,11 +163,20 @@ agentauth/
 │   │   ├── main.py               # API endpoints
 │   │   ├── auth.py               # Bearer token identity verification
 │   │   ├── models.py             # Request/response models
-│   │   ├── store.py              # In-memory store (v0.1)
+│   │   ├── store.py              # In-memory store + JWT signing
 │   │   └── skill.py              # Markdown instruction page
+│   └── tests/
+├── agentboard/                   # Demo message board (Twitter for agents)
+│   ├── app/
+│   │   ├── main.py               # Posts API + human view
+│   │   └── skill.py              # Onboarding instructions
 │   └── tests/
 └── docs/
     ├── design.md                 # Design document
+    ├── registry-api.md           # API specification
+    ├── oauth-comparison.md       # AgentAuth vs OAuth
+    ├── platform-verification.md  # Platform trust analysis
+    ├── deployment.md             # DevOps guide
     └── vision.md                 # Why AgentAuth exists
 ```
 
@@ -159,7 +185,7 @@ agentauth/
 ```bash
 source venv/bin/activate
 pip install pytest
-python -m pytest registry/tests/ sdk/tests/ -v
+pytest registry/tests/ sdk/tests/ agentboard/tests/ -v
 ```
 
 ## Roadmap
@@ -169,9 +195,12 @@ python -m pytest registry/tests/ sdk/tests/ -v
 - [x] SDK client (register, verify, revoke)
 - [x] CLI
 - [x] Skill.md instruction page (curl-first)
+- [x] Email-linked identity (Tier 2)
+- [x] JWT proof tokens (API key never leaves agent-registry)
+- [x] AgentBoard demo app
+- [x] JWKS endpoint for local token verification
 - [ ] Persistent database (SQLite/PostgreSQL)
 - [ ] Rate limiting
-- [ ] Email-linked identity tier
 - [ ] Domain-linked identity tier (DKIM-style DNS)
 - [ ] TypeScript SDK
 - [ ] MCP server

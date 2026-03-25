@@ -1,29 +1,40 @@
 # AgentAuth Registry API Specification
 
-**Base URL:** `https://registry.agentauth.dev/v1` (production, future)
+**Base URL:** `https://registry.iagents.cc/v1` (production)
 **Local dev:** `http://localhost:8000/v1`
 
 ---
 
 ## Overview
 
-The registry is the central identity service. Agents register to get an API key and include it with requests to prove identity. Platforms query the registry to verify agents.
+The registry is the central identity service. Agents register to get a `registry_secret_key` and use it to get `platform_proof_token`s for identity verification on platforms. Platforms verify proof tokens via the registry or locally using the registry's public key.
 
 Two types of callers:
-- **Agents** — register and prove identity with API keys
-- **Platforms** — look up agents to verify identity (public, no key needed)
+- **Agents** — register and get proof tokens using `registry_secret_key`
+- **Platforms** — verify proof tokens (public, no key needed)
+
+---
+
+## Key Concepts
+
+- `registry_secret_key` — Secret key for registry API calls ONLY. Never send to platforms.
+- `platform_proof_token` — JWT token to send to platforms. Reusable until expiry (5 minutes).
 
 ---
 
 ## Identity Verification
 
-The registry uses **Bearer token** API keys to verify agent identity.
+Agents authenticate with the registry using **Bearer token** with their `registry_secret_key`:
 
 ```
 Authorization: Bearer agentauth_xxxxxxxxxxxx
 ```
 
-API keys are generated at registration and shown only once. They use the prefix `agentauth_` followed by a random hex string.
+Agents authenticate with platforms using **Bearer token** with their `platform_proof_token`:
+
+```
+Authorization: Bearer eyJhbGciOiJFUzI1NiIs...
+```
 
 ---
 
@@ -31,22 +42,28 @@ API keys are generated at registration and shown only once. They use the prefix 
 
 ### `POST /v1/agents/register` — Register a new agent
 
-No auth required. Returns an API key (shown once).
+No auth required. Returns `registry_secret_key` (shown once) and a `platform_proof_token` for immediate use.
 
 **Request:**
 ```json
 {
   "name": "researcher_bot",
-  "description": "AI research agent"
+  "description": "AI research agent",
+  "email": "owner@example.com"
 }
 ```
+
+The `email` field is optional. If provided, a verification link is generated for Tier 2 verification.
 
 **Response (201):**
 ```json
 {
   "name": "researcher_bot",
   "description": "AI research agent",
-  "api_key": "agentauth_a1b2c3d4e5f6...",
+  "registry_secret_key": "agentauth_a1b2c3d4e5f6...",
+  "platform_proof_token": "eyJhbGciOiJFUzI1NiIs...",
+  "platform_proof_token_expires_in_seconds": 300,
+  "verified": false,
   "created_at": "2026-03-24T12:00:00Z",
   "active": true
 }
@@ -58,9 +75,64 @@ No auth required. Returns an API key (shown once).
 
 ---
 
+### `POST /v1/agents/me/proof` — Get a proof token
+
+**Requires `registry_secret_key`.** Returns a JWT proof token for use on platforms.
+
+**Headers:**
+```
+Authorization: Bearer agentauth_...
+```
+
+**Response (200):**
+```json
+{
+  "platform_proof_token": "eyJhbGciOiJFUzI1NiIs...",
+  "agent_name": "researcher_bot",
+  "expires_in_seconds": 300
+}
+```
+
+**Errors:**
+- `401` — Missing or invalid `registry_secret_key`
+
+---
+
+### `GET /v1/verify-proof/{token}` — Verify a proof token (Option A)
+
+**Public.** Platforms call this to verify a proof token. No auth required. Token is reusable until expiry.
+
+**Response (200):**
+```json
+{
+  "name": "researcher_bot",
+  "description": "AI research agent",
+  "verified": false,
+  "active": true
+}
+```
+
+**Errors:**
+- `401` — Invalid or expired proof token
+
+---
+
+### `GET /.well-known/jwks.json` — Public key for local verification (Option C)
+
+**Public.** Platforms fetch this once, then verify JWT proof tokens locally without calling the registry.
+
+**Response (200):**
+```json
+{
+  "public_key_pem": "-----BEGIN PUBLIC KEY-----\n..."
+}
+```
+
+---
+
 ### `GET /v1/agents/me` — Get your own profile
 
-**Requires API key.** Returns the profile of the agent making the request.
+**Requires `registry_secret_key`.**
 
 **Headers:**
 ```
@@ -72,31 +144,65 @@ Authorization: Bearer agentauth_...
 {
   "name": "researcher_bot",
   "description": "AI research agent",
+  "verified": false,
   "created_at": "2026-03-24T12:00:00Z",
   "active": true
 }
 ```
 
 **Errors:**
-- `401` — Missing or invalid API key
+- `401` — Missing or invalid `registry_secret_key`
+
+---
+
+### `POST /v1/agents/me/email` — Link email for verification
+
+**Requires `registry_secret_key`.** Links an email and triggers a verification link.
+
+**Request:**
+```json
+{
+  "email": "owner@example.com"
+}
+```
+
+**Response (200):**
+```json
+{
+  "agent_name": "researcher_bot",
+  "message": "Verification email sent. Check your inbox."
+}
+```
+
+---
+
+### `GET /v1/verify/{token}` — Verify email
+
+**Public.** Human clicks this link from the verification email.
+
+**Response (200):** HTML confirmation page. Agent is now verified (Tier 2).
+
+**Errors:**
+- `404` — Invalid or expired verification link
 
 ---
 
 ### `GET /v1/agents/{agent_name}` — Look up an agent
 
-**Public.** No auth required. Platforms call this to verify an agent exists.
+**Public.** No auth required.
 
 **Response (200):**
 ```json
 {
   "name": "researcher_bot",
   "description": "AI research agent",
+  "verified": false,
   "created_at": "2026-03-24T12:00:00Z",
   "active": true
 }
 ```
 
-Note: `api_key` is never included in public lookups.
+Note: `registry_secret_key` is never included in public lookups.
 
 **Errors:**
 - `404` — Agent not found
@@ -114,6 +220,7 @@ Note: `api_key` is never included in public lookups.
     {
       "name": "researcher_bot",
       "description": "AI research agent",
+      "verified": false,
       "created_at": "2026-03-24T12:00:00Z",
       "active": true
     }
@@ -122,13 +229,11 @@ Note: `api_key` is never included in public lookups.
 }
 ```
 
-Note: `api_key` is never included in list responses.
-
 ---
 
 ### `DELETE /v1/agents/{agent_name}` — Revoke an agent
 
-**Requires API key.** Must be the agent's own API key.
+**Requires `registry_secret_key`.**
 
 **Headers:**
 ```
@@ -145,20 +250,30 @@ Authorization: Bearer agentauth_...
 
 **Errors:**
 - `401` — Missing Authorization header
-- `403` — Invalid API key or agent not found
+- `403` — Invalid `registry_secret_key` or agent not found
 
 ---
 
 ## Verification Flow (for platforms)
 
-When a platform needs to verify an agent:
+### Option A — Verify via registry (simple)
 
 ```
-1. Agent sends: Authorization: Bearer agentauth_...
-2. Platform calls: GET /v1/agents/{agent_name}
-3. Registry returns: name, description, active status
-4. Platform checks: does the agent exist and is it active?
+1. Agent gets platform_proof_token from registry
+2. Agent sends: Authorization: Bearer <platform_proof_token> to platform
+3. Platform calls: GET /v1/verify-proof/<platform_proof_token>
+4. Registry returns: name, description, verified, active
 5. Agent is verified.
+```
+
+### Option C — Verify locally (efficient)
+
+```
+1. Platform fetches public key once: GET /.well-known/jwks.json
+2. Agent sends: Authorization: Bearer <platform_proof_token> to platform
+3. Platform decodes JWT locally using the public key
+4. Platform checks: is the token valid, not expired?
+5. Agent is verified — no registry call needed.
 ```
 
 ---

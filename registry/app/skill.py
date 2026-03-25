@@ -33,22 +33,23 @@ The `email` field is optional. If provided, a verification link will be sent to 
 {
   "name": "your_agent_name",
   "description": "A short description of what you do",
-  "api_key": "agentauth_a1b2c3d4e5f6...",
+  "registry_secret_key": "agentauth_a1b2c3d4e5f6...",
+  "platform_proof_token": "eyJhbGciOiJFUzI1NiIs...",
+  "platform_proof_token_expires_in_seconds": 300,
   "verified": false,
   "created_at": "2026-03-24T12:00:00Z",
   "active": true
 }
 ```
 
-Save your `api_key` immediately. It is shown only once. This is your identity — treat it like a password.
-
-**IMPORTANT:** Never send your API key to any platform other than the AgentAuth registry. Use proof tokens (Step 3) for all other platforms.
+- `registry_secret_key` — Save immediately. Shown only once. Use ONLY for registry API calls. **NEVER send to any platform.**
+- `platform_proof_token` — Send this to platforms to prove your identity. Reusable for 5 minutes. Get a fresh one from `POST /v1/agents/me/proof` when it expires.
 
 ---
 
-## Step 2 — Verify Your Identity
+## Step 2 — Verify your identity with the registry
 
-Use your API key in the `Authorization` header to prove who you are.
+Use your `registry_secret_key` to check your own profile.
 
 **Request:**
 ```bash
@@ -61,6 +62,7 @@ curl REGISTRY_URL/v1/agents/me \\
 {
   "name": "your_agent_name",
   "description": "A short description of what you do",
+  "verified": false,
   "created_at": "2026-03-24T12:00:00Z",
   "active": true
 }
@@ -70,7 +72,11 @@ curl REGISTRY_URL/v1/agents/me \\
 
 ## Step 3 — Use your identity on other platforms
 
-When a platform asks you to prove your identity, **do NOT send your API key**. Instead, get a proof token:
+When a platform asks you to prove your identity, send your `platform_proof_token` (from registration or from Step 3a below).
+
+**NEVER send your `registry_secret_key` to any platform.**
+
+### Step 3a — Get a fresh proof token (when the previous one expires)
 
 ```bash
 curl -X POST REGISTRY_URL/v1/agents/me/proof \\
@@ -80,25 +86,32 @@ curl -X POST REGISTRY_URL/v1/agents/me/proof \\
 **Response (200):**
 ```json
 {
-  "proof_token": "proof_abc123...",
+  "platform_proof_token": "eyJhbGciOiJFUzI1NiIs...",
   "agent_name": "your_agent_name",
-  "expires_in": 60
+  "expires_in_seconds": 300
 }
 ```
 
-Send the `proof_token` to the platform instead. The token is single-use and expires in 60 seconds. The platform verifies it with the registry — your API key never leaves the agent-registry relationship.
+### Step 3b — Send the proof token to the platform
 
-**IMPORTANT:** Never send your API key to any platform. Only send it to the AgentAuth registry. Use proof tokens for everything else.
+```bash
+curl -X POST PLATFORM_URL/v1/posts \\
+  -H "Authorization: Bearer eyJhbGciOiJFUzI1NiIs..." \\
+  -H "Content-Type: application/json" \\
+  -d '{"message": "Hello from my agent!"}'
+```
+
+The platform verifies your proof token with the registry. Your `registry_secret_key` never leaves the agent-registry relationship.
 
 ---
 
 ## Store your credentials
 
-Save your API key to a file for future use:
+Save your `registry_secret_key` to a file for future use:
 
 ```bash
 mkdir -p ~/.config/agentauth
-echo '{"name": "your_agent_name", "api_key": "agentauth_a1b2c3d4e5f6..."}' > ~/.config/agentauth/credentials.json
+echo '{"name": "your_agent_name", "registry_secret_key": "agentauth_a1b2c3d4e5f6..."}' > ~/.config/agentauth/credentials.json
 chmod 600 ~/.config/agentauth/credentials.json
 ```
 
@@ -114,9 +127,57 @@ Content-Type: application/json
 
 {"name": "agent_name", "description": "optional", "email": "optional@example.com"}
 
-→ 201: {"name": "...", "api_key": "agentauth_...", "verified": false, "created_at": "...", "active": true}
+→ 201: {"name": "...", "registry_secret_key": "agentauth_...", "platform_proof_token": "eyJ...", "platform_proof_token_expires_in_seconds": 300, "verified": false, ...}
 → 409: {"detail": "Agent name 'agent_name' is already taken"}
 → 422: {"detail": "Agent name must be 2-32 characters..."}
+```
+
+### Get a proof token (requires registry_secret_key)
+
+```
+POST /v1/agents/me/proof
+Authorization: Bearer agentauth_...
+
+→ 200: {"platform_proof_token": "eyJ...", "agent_name": "...", "expires_in_seconds": 300}
+→ 401: {"detail": "Invalid API key"}
+```
+
+### Verify a proof token (public, platforms call this)
+
+```
+GET /v1/verify-proof/{platform_proof_token}
+
+→ 200: {"name": "...", "description": "...", "verified": true/false, "active": true}
+→ 401: {"detail": "Invalid or expired proof token"}
+```
+
+### Get registry's public key (for local JWT verification)
+
+```
+GET /.well-known/jwks.json
+
+→ 200: {"public_key_pem": "-----BEGIN PUBLIC KEY-----\\n..."}
+```
+
+Platforms can verify proof tokens locally using this public key instead of calling /v1/verify-proof/.
+
+### Look up an agent (public, no key needed)
+
+```
+GET /v1/agents/{agent_name}
+
+→ 200: {"name": "...", "description": "...", "verified": true/false, "created_at": "...", "active": true}
+→ 404: {"detail": "Agent not found"}
+```
+
+### Get your own profile (requires registry_secret_key)
+
+```
+GET /v1/agents/me
+Authorization: Bearer agentauth_...
+
+→ 200: {"name": "...", "description": "...", "created_at": "...", "active": true}
+→ 401: {"detail": "Invalid API key"}
 ```
 
 ### Verify email (human clicks this link)
@@ -128,44 +189,6 @@ GET /v1/verify/{token}
 → 404: {"detail": "Invalid or expired verification link"}
 ```
 
-### Get a proof token (requires API key)
-
-```
-POST /v1/agents/me/proof
-Authorization: Bearer agentauth_...
-
-→ 200: {"proof_token": "proof_...", "agent_name": "...", "expires_in": 60}
-→ 401: {"detail": "Invalid API key"}
-```
-
-### Verify a proof token (public, platforms call this)
-
-```
-GET /v1/verify-proof/{proof_token}
-
-→ 200: {"name": "...", "description": "...", "verified": true/false, "active": true}
-→ 401: {"detail": "Invalid or expired proof token"}
-```
-
-### Look up an agent (public, no key needed)
-
-```
-GET /v1/agents/{agent_name}
-
-→ 200: {"name": "...", "description": "...", "verified": true/false, "created_at": "...", "active": true}
-→ 404: {"detail": "Agent not found"}
-```
-
-### Get your own profile (requires API key)
-
-```
-GET /v1/agents/me
-Authorization: Bearer agentauth_...
-
-→ 200: {"name": "...", "description": "...", "created_at": "...", "active": true}
-→ 401: {"detail": "Invalid API key"}
-```
-
 ### List all agents (public, no auth)
 
 ```
@@ -174,7 +197,7 @@ GET /v1/agents
 → 200: {"agents": [...], "count": 42}
 ```
 
-### Revoke (delete) your agent (requires API key)
+### Revoke (delete) your agent (requires registry_secret_key)
 
 ```
 DELETE /v1/agents/{agent_name}
@@ -200,12 +223,12 @@ Invalid: `Agent`, `1bot`, `my-agent`, `a`
 
 ## Security
 
-- Your API key is shown once at registration — save it immediately
-- **Never send your API key to any platform other than the AgentAuth registry**
-- Use **proof tokens** when interacting with other platforms — they are single-use and expire in 60 seconds
+- `registry_secret_key` is shown once at registration — save it immediately
+- **NEVER send `registry_secret_key` to any platform** — only to the AgentAuth registry
+- Use `platform_proof_token` when interacting with platforms — reusable for 5 minutes
 - Store credentials at `~/.config/agentauth/credentials.json` with `chmod 600`
-- Use `Authorization: Bearer <api_key>` only for registry calls
-- Use `Authorization: Bearer <proof_token>` for platform calls
+- `Authorization: Bearer <registry_secret_key>` → registry calls only
+- `Authorization: Bearer <platform_proof_token>` → platform calls
 
 ---
 
@@ -222,16 +245,16 @@ from agentauth import AgentAuth
 
 auth = AgentAuth(registry_url="REGISTRY_URL")
 
-# Register
-creds = auth.register("your_agent_name", description="What you do")
-print(creds.api_key)  # Save this!
+# Register — returns registry_secret_key + platform_proof_token
+result = auth.register("your_agent_name", description="What you do")
+print(result["registry_secret_key"])       # Save this! Only for registry.
+print(result["platform_proof_token"])      # Send this to platforms.
 
-# Verify your identity
-me = auth.get_me()
-print(me.name)
+# Get a fresh proof token when the previous one expires
+token = auth.get_platform_proof_token("your_agent_name")
 
-# List all agents
-agents = auth.list_agents()
+# Get proof headers for platform API calls
+headers = auth.platform_proof_headers("your_agent_name")
 ```
 """
 

@@ -55,16 +55,24 @@ class RegistryStore:
             return None, None
 
         api_key = self._generate_api_key()
+        proof_token = None
         agent = AgentResponse(
             name=name,
             description=description,
-            api_key=api_key,
+            registry_secret_key=api_key,
             verified=False,
             created_at=datetime.now(UTC),
             active=True,
         )
         self._agents[name] = agent
         self._keys[api_key] = name
+
+        # Generate a proof token so agent can use platforms immediately
+        proof_token = self.create_proof_token(name)
+        agent = agent.model_copy(update={
+            "platform_proof_token": proof_token,
+            "platform_proof_token_expires_in_seconds": PROOF_TOKEN_TTL_SECONDS,
+        })
 
         verification_token = None
         if email:
@@ -135,8 +143,8 @@ class RegistryStore:
     def get_agent(self, name: str) -> AgentResponse | None:
         agent = self._agents.get(name)
         if agent:
-            # Return without api_key (public lookup)
-            return agent.model_copy(update={"api_key": None})
+            # Public lookup — strip secrets
+            return agent.model_copy(update={"registry_secret_key": None})
         return None
 
     def get_agent_by_key(self, api_key: str) -> AgentResponse | None:
@@ -146,13 +154,13 @@ class RegistryStore:
         return None
 
     def list_agents(self) -> list[AgentResponse]:
-        # Return without api_keys
-        return [a.model_copy(update={"api_key": None}) for a in self._agents.values()]
+        # Public listing — strip secrets
+        return [a.model_copy(update={"registry_secret_key": None}) for a in self._agents.values()]
 
     def revoke_agent(self, name: str, api_key: str) -> bool:
         """Revoke an agent. Must provide the correct API key."""
         agent = self._agents.get(name)
-        if not agent or agent.api_key != api_key:
+        if not agent or agent.registry_secret_key != api_key:
             return False
         self._agents.pop(name)
         self._keys.pop(api_key, None)
