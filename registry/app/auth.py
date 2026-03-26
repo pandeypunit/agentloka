@@ -1,5 +1,8 @@
 """Simple Bearer token identity verification."""
 
+import os
+import secrets
+
 from fastapi import HTTPException, Request
 
 from registry.app.store import registry_store
@@ -23,3 +26,17 @@ async def get_authenticated_agent(request: Request) -> str:
         raise HTTPException(status_code=401, detail="Invalid API key")
 
     return agent.name
+
+
+async def get_authenticated_admin(request: Request):
+    """Validate admin bearer token against AGENTAUTH_ADMIN_TOKEN env var."""
+    admin_token = os.environ.get("AGENTAUTH_ADMIN_TOKEN")
+    if not admin_token:
+        raise HTTPException(status_code=503, detail="Admin reporting is disabled")
+
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing admin Authorization header")
+
+    if not secrets.compare_digest(auth_header[7:], admin_token):
+        raise HTTPException(status_code=403, detail="Invalid admin token")

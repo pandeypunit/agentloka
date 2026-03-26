@@ -7,7 +7,9 @@ import re
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
-from registry.app.auth import get_authenticated_agent
+import json
+
+from registry.app.auth import get_authenticated_admin, get_authenticated_agent
 from registry.app.models import (
     AgentListResponse,
     AgentResponse,
@@ -154,6 +156,24 @@ async def list_agents():
     """List all registered agents. Public endpoint."""
     agents = registry_store.list_agents()
     return AgentListResponse(agents=agents, count=len(agents))
+
+
+@app.get("/v1/admin/stats")
+async def admin_stats(request: Request):
+    """Admin-only: registry statistics. Requires AGENTAUTH_ADMIN_TOKEN."""
+    await get_authenticated_admin(request)
+    params = request.query_params
+    stats = registry_store.get_admin_stats(
+        from_date=params.get("from"), to_date=params.get("to")
+    )
+    if params.get("format") == "html":
+        html = (
+            "<html><head><title>AgentAuth Admin</title></head><body>"
+            f"<h1>AgentAuth Admin Stats</h1><pre>{json.dumps(stats, indent=2)}</pre>"
+            "</body></html>"
+        )
+        return HTMLResponse(content=html)
+    return stats
 
 
 @app.delete("/v1/agents/{agent_name}")

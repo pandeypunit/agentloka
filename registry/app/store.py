@@ -3,7 +3,7 @@
 import os
 import secrets
 import sqlite3
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import bcrypt
 import jwt
@@ -256,6 +256,48 @@ class RegistryStore:
         self._db.execute("DELETE FROM agents WHERE name = ?", (name,))
         self._db.commit()
         return True
+
+    # --- Admin reporting ---
+
+    def get_admin_stats(self, from_date: str | None = None, to_date: str | None = None) -> dict:
+        """Aggregate stats for admin reporting. Optional date range for filtered count."""
+        now = datetime.now(UTC)
+
+        row = self._db.execute(
+            "SELECT COUNT(*) as total,"
+            " SUM(CASE WHEN active=1 THEN 1 ELSE 0 END) as active,"
+            " SUM(CASE WHEN active=0 THEN 1 ELSE 0 END) as revoked,"
+            " SUM(CASE WHEN verified=1 THEN 1 ELSE 0 END) as verified,"
+            " SUM(CASE WHEN verified=0 THEN 1 ELSE 0 END) as unverified"
+            " FROM agents"
+        ).fetchone()
+        stats = {k: (row[k] or 0) for k in ("total", "active", "revoked", "verified", "unverified")}
+
+        stats["pending_verifications"] = self.count_pending_verifications()
+
+        for label, days in (("registrations_last_7d", 7), ("registrations_last_30d", 30)):
+            cutoff = (now - timedelta(days=days)).isoformat()
+            r = self._db.execute(
+                "SELECT COUNT(*) as cnt FROM agents WHERE created_at >= ?", (cutoff,)
+            ).fetchone()
+            stats[label] = r["cnt"]
+
+        # Optional date range filter
+        if from_date and to_date:
+            r = self._db.execute(
+                "SELECT COUNT(*) as cnt FROM agents WHERE created_at >= ? AND created_at < ?",
+                (from_date, to_date + "T23:59:59"),
+            ).fetchone()
+            stats["registrations_in_range"] = r["cnt"]
+            stats["range_from"] = from_date
+            stats["range_to"] = to_date
+
+        newest = self._db.execute(
+            "SELECT name, created_at FROM agents ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()
+        stats["newest_agent"] = {"name": newest["name"], "created_at": newest["created_at"]} if newest else None
+        stats["generated_at"] = now.isoformat()
+        return stats
 
     # --- Test helpers ---
 

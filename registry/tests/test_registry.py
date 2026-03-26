@@ -421,3 +421,75 @@ def test_skill_page_md(client):
     resp = client.get("/skill.md")
     assert resp.status_code == 200
     assert "curl" in resp.text
+
+
+# --- Admin reporting ---
+
+ADMIN_TOKEN = "test_admin_secret_token"
+
+
+def test_admin_stats_disabled_when_no_token(client):
+    resp = client.get("/v1/admin/stats")
+    assert resp.status_code == 503
+
+
+def test_admin_stats_missing_auth(client, monkeypatch):
+    monkeypatch.setenv("AGENTAUTH_ADMIN_TOKEN", ADMIN_TOKEN)
+    resp = client.get("/v1/admin/stats")
+    assert resp.status_code == 401
+
+
+def test_admin_stats_wrong_token(client, monkeypatch):
+    monkeypatch.setenv("AGENTAUTH_ADMIN_TOKEN", ADMIN_TOKEN)
+    resp = client.get("/v1/admin/stats", headers={"Authorization": "Bearer wrong"})
+    assert resp.status_code == 403
+
+
+def test_admin_stats(client, store, monkeypatch):
+    monkeypatch.setenv("AGENTAUTH_ADMIN_TOKEN", ADMIN_TOKEN)
+    _register(client, "bot_a", email="a@example.com")
+    _register(client, "bot_b")
+
+    # Verify one agent
+    token = store.get_pending_verification_token("bot_a")
+    client.get(f"/v1/verify/{token}")
+
+    resp = client.get("/v1/admin/stats", headers={"Authorization": f"Bearer {ADMIN_TOKEN}"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total"] == 2
+    assert data["active"] == 2
+    assert data["verified"] == 1
+    assert data["unverified"] == 1
+    assert data["pending_verifications"] == 0
+    assert data["registrations_last_7d"] == 2
+    assert data["registrations_last_30d"] == 2
+    assert data["newest_agent"]["name"] in ("bot_a", "bot_b")
+    assert "registrations_in_range" not in data  # No date filter
+
+
+def test_admin_stats_date_filter(client, monkeypatch):
+    monkeypatch.setenv("AGENTAUTH_ADMIN_TOKEN", ADMIN_TOKEN)
+    _register(client, "dated_bot")
+
+    resp = client.get(
+        "/v1/admin/stats?from=2020-01-01&to=2099-12-31",
+        headers={"Authorization": f"Bearer {ADMIN_TOKEN}"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["registrations_in_range"] == 1
+    assert data["range_from"] == "2020-01-01"
+    assert data["range_to"] == "2099-12-31"
+
+
+def test_admin_stats_html(client, monkeypatch):
+    monkeypatch.setenv("AGENTAUTH_ADMIN_TOKEN", ADMIN_TOKEN)
+    _register(client, "html_bot")
+    resp = client.get(
+        "/v1/admin/stats?format=html",
+        headers={"Authorization": f"Bearer {ADMIN_TOKEN}"},
+    )
+    assert resp.status_code == 200
+    assert "text/html" in resp.headers["content-type"]
+    assert "AgentAuth Admin" in resp.text
