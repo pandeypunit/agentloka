@@ -1,10 +1,18 @@
 """Tests for the AgentAuth SDK client — flat identity model."""
 
 import json
+import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import jwt
 import pytest
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.serialization import (
+    Encoding,
+    NoEncryption,
+    PublicFormat,
+)
 
 from agentauth.client import AgentAuth
 
@@ -309,3 +317,108 @@ def test_revoke_wrong_key(mock_delete, auth, tmp_config):
 def test_revoke_not_registered(auth):
     with pytest.raises(FileNotFoundError):
         auth.revoke("ghost_bot")
+
+
+# --- Platform-side token verification ---
+
+
+@pytest.fixture
+def ec_keypair():
+    """Generate a test ECDSA P-256 keypair."""
+    private_key = ec.generate_private_key(ec.SECP256R1())
+    public_pem = private_key.public_key().public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo).decode()
+    return private_key, public_pem
+
+
+@patch("agentauth.client.httpx.get")
+def test_get_public_key(mock_get, auth, ec_keypair):
+    _, public_pem = ec_keypair
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = {"public_key_pem": public_pem}
+    mock_resp.raise_for_status = MagicMock()
+    mock_get.return_value = mock_resp
+
+    key = auth.get_public_key()
+    assert key == public_pem
+    mock_get.assert_called_once_with("http://test:8000/.well-known/jwks.json")
+
+
+@patch("agentauth.client.httpx.get")
+def test_get_public_key_cached(mock_get, auth, ec_keypair):
+    _, public_pem = ec_keypair
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = {"public_key_pem": public_pem}
+    mock_resp.raise_for_status = MagicMock()
+    mock_get.return_value = mock_resp
+
+    auth.get_public_key()
+    auth.get_public_key()
+    assert mock_get.call_count == 1  # Only one HTTP call
+
+
+@patch("agentauth.client.httpx.get")
+def test_verify_proof_token_valid(mock_get, auth, ec_keypair):
+    private_key, public_pem = ec_keypair
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = {"public_key_pem": public_pem}
+    mock_resp.raise_for_status = MagicMock()
+    mock_get.return_value = mock_resp
+
+    token = jwt.encode(
+        {"sub": "test_bot", "description": "A bot", "verified": False, "exp": int(time.time()) + 300},
+        private_key,
+        algorithm="ES256",
+    )
+
+    result = auth.verify_proof_token(token)
+    assert result is not None
+    assert result["sub"] == "test_bot"
+    assert result["description"] == "A bot"
+
+
+@patch("agentauth.client.httpx.get")
+def test_verify_proof_token_expired(mock_get, auth, ec_keypair):
+    private_key, public_pem = ec_keypair
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = {"public_key_pem": public_pem}
+    mock_resp.raise_for_status = MagicMock()
+    mock_get.return_value = mock_resp
+
+    token = jwt.encode(
+        {"sub": "test_bot", "exp": int(time.time()) - 60},
+        private_key,
+        algorithm="ES256",
+    )
+
+    assert auth.verify_proof_token(token) is None
+
+
+def test_verify_proof_token_invalid(auth):
+    auth._public_key_pem = "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE\n-----END PUBLIC KEY-----"
+    assert auth.verify_proof_token("garbage.token.here") is None
+
+
+@patch("agentauth.client.httpx.get")
+def test_verify_proof_token_via_registry(mock_get, auth):
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "name": "test_bot",
+        "description": "A bot",
+        "verified": False,
+        "active": True,
+    }
+    mock_get.return_value = mock_resp
+
+    result = auth.verify_proof_token_via_registry("eyJhbGci_token123")
+    assert result["name"] == "test_bot"
+    mock_get.assert_called_once_with("http://test:8000/v1/verify-proof/eyJhbGci_token123")
+
+
+@patch("agentauth.client.httpx.get")
+def test_verify_proof_token_via_registry_invalid(mock_get, auth):
+    mock_resp = MagicMock()
+    mock_resp.status_code = 401
+    mock_get.return_value = mock_resp
+
+    assert auth.verify_proof_token_via_registry("bad_token") is None

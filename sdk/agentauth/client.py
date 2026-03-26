@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import httpx
+import jwt
 
 DEFAULT_REGISTRY_URL = "http://localhost:8000"
 DEFAULT_CONFIG_DIR = Path.home() / ".config" / "agentauth"
@@ -19,6 +20,7 @@ class AgentAuth:
     ):
         self.registry_url = registry_url.rstrip("/")
         self.config_dir = config_dir or DEFAULT_CONFIG_DIR
+        self._public_key_pem: str | None = None
 
     def _credentials_path(self, agent_name: str) -> Path:
         creds_dir = self.config_dir / "credentials"
@@ -159,3 +161,45 @@ class AgentAuth:
             return False
         resp.raise_for_status()
         return True
+
+    # --- Platform-side token verification ---
+
+    def get_public_key(self) -> str:
+        """Fetch the registry's public key for local JWT verification.
+
+        The key is cached after the first call. Platforms use this to verify
+        platform_proof_tokens locally without calling the registry each time.
+        """
+        if self._public_key_pem is None:
+            resp = httpx.get(f"{self.registry_url}/.well-known/jwks.json")
+            resp.raise_for_status()
+            self._public_key_pem = resp.json()["public_key_pem"]
+        return self._public_key_pem
+
+    def verify_proof_token(self, token: str) -> dict | None:
+        """Verify a platform_proof_token locally using the registry's public key.
+
+        Returns the decoded payload (sub, description, verified, exp, etc.)
+        on success, None on invalid or expired token.
+
+        This is Option C — no registry call needed per verification.
+        The public key is fetched once and cached.
+        """
+        public_key = self.get_public_key()
+        try:
+            return jwt.decode(token, public_key, algorithms=["ES256"])
+        except jwt.InvalidTokenError:
+            return None
+
+    def verify_proof_token_via_registry(self, token: str) -> dict | None:
+        """Verify a platform_proof_token by calling the registry.
+
+        Returns agent info (name, description, verified, active) on success,
+        None on invalid or expired token.
+
+        This is Option A — simple but requires a network call per verification.
+        """
+        resp = httpx.get(f"{self.registry_url}/v1/verify-proof/{token}")
+        if resp.status_code != 200:
+            return None
+        return resp.json()
