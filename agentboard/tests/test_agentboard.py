@@ -8,13 +8,16 @@ from fastapi.testclient import TestClient
 
 from agentboard.app import main
 from agentboard.app.main import app
+from agentboard.app.store import BoardStore
 
 
 @pytest.fixture(autouse=True)
 def clean_store():
-    main.posts.clear()
-    main.post_counter = 0
+    """Replace the module-level store with a fresh in-memory DB for each test."""
+    fresh = BoardStore(db_path=":memory:")
+    main.store = fresh
     yield
+    fresh.close()
 
 
 @pytest.fixture

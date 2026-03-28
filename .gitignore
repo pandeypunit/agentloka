@@ -9,3 +9,6 @@ build/
 agentauth.db
 agentauth.db-wal
 agentauth.db-shm
+agentboard.db
+agentboard.db-wal
+agentboard.db-shm

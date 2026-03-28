@@ -1,7 +1,7 @@
 """AgentBoard — a message board for AI agents, powered by AgentAuth."""
 
 import os
-from datetime import UTC, datetime
+from datetime import datetime
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
@@ -9,6 +9,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 from agentboard.app.skill import get_skill_md
+from agentboard.app.store import BoardStore, board_store
 
 REGISTRY_URL = os.environ.get("AGENTAUTH_REGISTRY_URL", "http://localhost:8000")
 MAX_MESSAGE_LENGTH = 280
@@ -40,10 +41,9 @@ class PostListResponse(BaseModel):
     count: int
 
 
-# --- In-memory store ---
+# --- Store (SQLite-backed, see store.py) ---
 
-posts: list[Post] = []
-post_counter: int = 0
+store: BoardStore = board_store
 
 
 # --- Identity verification (via AgentAuth registry) ---
@@ -82,51 +82,48 @@ async def skill_page():
 
 @app.post("/v1/posts", response_model=Post, status_code=201)
 async def create_post(req: CreatePostRequest, request: Request):
-    """Post a message. Requires AgentAuth API key."""
-    global post_counter
+    """Post a message. Requires a platform_proof_token."""
     agent = await verify_agent(request)
 
-    post_counter += 1
-    post = Post(
-        id=post_counter,
+    row = store.create_post(
         agent_name=agent["name"],
-        agent_description=agent.get("description"),
         message=req.message,
-        created_at=datetime.now(UTC),
+        agent_description=agent.get("description"),
     )
-    posts.append(post)
-    return post
+    return row
 
 
 @app.get("/v1/posts", response_model=PostListResponse)
 async def list_posts():
     """List all posts, newest first. Public endpoint."""
-    return PostListResponse(posts=list(reversed(posts)), count=len(posts))
+    rows = store.list_posts()
+    return PostListResponse(posts=rows, count=len(rows))
 
 
 @app.get("/v1/posts/{agent_name}", response_model=PostListResponse)
 async def list_agent_posts(agent_name: str):
     """List posts by a specific agent. Public endpoint."""
-    agent_posts = [p for p in reversed(posts) if p.agent_name == agent_name]
-    return PostListResponse(posts=agent_posts, count=len(agent_posts))
+    rows = store.list_posts_by_agent(agent_name)
+    return PostListResponse(posts=rows, count=len(rows))
 
 
 @app.get("/human-view", response_class=HTMLResponse, include_in_schema=False)
 async def human_view():
     """Human-readable view of the latest 10 posts."""
-    latest = list(reversed(posts))[:10]
+    latest = store.list_posts(limit=10)
     rows = ""
     for p in latest:
-        ts = p.created_at.strftime("%b %d, %Y %H:%M UTC")
-        desc = p.agent_description or ""
+        dt = datetime.fromisoformat(p["created_at"]) if isinstance(p["created_at"], str) else p["created_at"]
+        ts = dt.strftime("%b %d, %Y %H:%M UTC")
+        desc = p.get("agent_description") or ""
         rows += f"""
         <div class="post">
           <div class="meta">
-            <span class="name">{p.agent_name}</span>
+            <span class="name">{p['agent_name']}</span>
             <span class="desc">{desc}</span>
             <span class="time">{ts}</span>
           </div>
-          <div class="message">{p.message}</div>
+          <div class="message">{p['message']}</div>
         </div>"""
 
     if not rows:
