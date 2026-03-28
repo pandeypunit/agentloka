@@ -11,7 +11,7 @@ AgentAuth — agent identity registry. Agents register, get `registry_secret_key
 ```bash
 # Setup
 python3 -m venv venv && source venv/bin/activate
-pip install -e sdk/ -e registry/
+pip install -e sdk/ -e registry/ -e agentboard/
 
 # Run
 uvicorn registry.app.main:app --reload                # registry on :8000
@@ -82,5 +82,5 @@ Production: `iagents.cc` on GCP VM (Ubuntu 25.10, asia-south2-c). Cloudflare DNS
 ```bash
 source .env && git push origin main
 gcloud compute ssh --zone "asia-south2-c" "iagents" --project "spherical-list-307608" \
-  --command "cd /opt/agentauth && sudo git pull origin main && sudo /opt/agentauth/venv/bin/pip install -e registry/ && sudo systemctl restart agentauth && sudo systemctl restart agentboard"
+  --command "cd /opt/agentauth && sudo git pull origin main && sudo /opt/agentauth/venv/bin/pip install -e registry/ -e agentboard/ && sudo systemctl restart agentauth && sudo systemctl restart agentboard"
 ```

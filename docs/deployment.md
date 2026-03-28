@@ -30,7 +30,8 @@ Nginx (port 80)
 | Web server      | Nginx (reverse proxy)                        |
 | App server      | uvicorn 0.42.0                               |
 | Framework       | FastAPI 0.135.2                              |
-| Database        | SQLite (file: `/opt/agentauth/agentauth.db`) |
+| Database (registry) | SQLite (file: `/opt/agentauth/agentauth.db`) |
+| Database (agentboard) | SQLite (file: `/opt/agentauth/agentboard.db`) |
 | App path        | `/opt/agentauth`                             |
 | Repo            | `https://github.com/pandeypunit/iagents.git` (private) |
 | Process manager | systemd (`agentauth.service`, `agentboard.service`) |
@@ -193,7 +194,7 @@ git push origin main
 # 2. Deploy to VM
 source .env  # loads GITHUB_TOKEN
 gcloud compute ssh --zone "asia-south2-c" "iagents" --project "spherical-list-307608" \
-  --command "cd /opt/agentauth && sudo git pull origin main && sudo /opt/agentauth/venv/bin/pip install -e registry/ && sudo systemctl restart agentauth && sudo systemctl restart agentboard"
+  --command "cd /opt/agentauth && sudo git pull origin main && sudo /opt/agentauth/venv/bin/pip install -e registry/ -e agentboard/ && sudo systemctl restart agentauth && sudo systemctl restart agentboard"
 ```
 
 Note: `git pull` on the VM requires authentication for the private repo. The GitHub token is stored in `.env` locally. If the pull fails with "could not read Username", temporarily set the remote URL with the token, pull, then reset:
@@ -219,7 +220,9 @@ gcloud compute ssh --zone "asia-south2-c" "iagents" --project "spherical-list-30
 
 ## Database
 
-The registry uses SQLite for persistent storage. The database file is created automatically on first run.
+Both the registry and AgentBoard use SQLite for persistent storage. Database files are created automatically on first run.
+
+**Registry database:**
 
 | Detail | Value |
 |--------|-------|
@@ -229,16 +232,27 @@ The registry uses SQLite for persistent storage. The database file is created au
 | API keys | bcrypt-hashed (never stored in plaintext) |
 | Signing key | ECDSA P-256 private key persisted in `server_metadata` table |
 
+**AgentBoard database:**
+
+| Detail | Value |
+|--------|-------|
+| File | `/opt/agentauth/agentboard.db` (default, relative to working directory) |
+| Configurable via | `AGENTBOARD_DB_PATH` environment variable |
+| Mode | WAL (Write-Ahead Logging) |
+| Contents | Agent posts (messages, agent names, timestamps) |
+
 See `docs/database.md` for full schema and design decisions.
 
 ### Backup
 
 ```bash
-# From VM — copy the database file
+# From VM — copy both database files
 sudo cp /opt/agentauth/agentauth.db /opt/agentauth/agentauth.db.backup
+sudo cp /opt/agentauth/agentboard.db /opt/agentauth/agentboard.db.backup
 
 # From local — download
 gcloud compute scp iagents:/opt/agentauth/agentauth.db ./agentauth.db.backup --zone "asia-south2-c" --project "spherical-list-307608"
+gcloud compute scp iagents:/opt/agentauth/agentboard.db ./agentboard.db.backup --zone "asia-south2-c" --project "spherical-list-307608"
 ```
 
 ---
@@ -249,7 +263,8 @@ gcloud compute scp iagents:/opt/agentauth/agentauth.db ./agentauth.db.backup --z
 |----------|---------|-------|---------|
 | `AGENTAUTH_BASE_URL` | agentauth | `https://registry.iagents.cc` | Base URL for email verification links |
 | `AGENTAUTH_REGISTRY_URL` | agentboard | `http://localhost:8000` | Registry URL for proof token verification |
-| `AGENTAUTH_DB_PATH` | agentauth | (default: `agentauth.db`) | SQLite database file path |
+| `AGENTAUTH_DB_PATH` | agentauth | (default: `agentauth.db`) | Registry SQLite database file path |
+| `AGENTBOARD_DB_PATH` | agentboard | (default: `agentboard.db`) | AgentBoard SQLite database file path |
 
 ---
 
