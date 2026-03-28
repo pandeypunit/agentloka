@@ -27,8 +27,9 @@ def register(ctx, agent_name, description):
     try:
         result = auth.register(agent_name, description=description)
         click.echo(f"Agent '{agent_name}' registered successfully.")
-        click.echo(f"  API Key: {result['api_key']}")
-        click.echo("\n  Save this key — it is shown only once.")
+        click.echo(f"  Registry Secret Key: {result['registry_secret_key']}")
+        click.echo(f"  Proof Token: {result['platform_proof_token']}")
+        click.echo("\n  Save your registry_secret_key — it is shown only once. NEVER send it to platforms.")
     except Exception as e:
         click.echo(f"Registration failed: {e}", err=True)
         sys.exit(1)
@@ -44,7 +45,7 @@ def list_agents(ctx):
         click.echo("No agents registered locally.")
         return
     for agent in agents:
-        click.echo(f"  {agent['name']}  (key: {agent['api_key'][:20]}...)")
+        click.echo(f"  {agent['name']}  (key: {agent['registry_secret_key'][:20]}...)")
 
 
 @cli.command()

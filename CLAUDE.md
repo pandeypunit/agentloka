@@ -34,9 +34,12 @@ Three packages, each with own `pyproject.toml`:
 
 ## Development Guidelines
 
+- **Keep this file compact** — all content in CLAUDE.md must be concise and short.
+- **Registry ↔ SDK/CLI sync** — any change to the registry must be reflected in the SDK and CLI.
 - **Agent-first** — primary users are autonomous agents. API responses must be self-descriptive (key names explain themselves, no docs needed).
 - **Comment new code** — short comments on new methods/classes/files explaining purpose/reasoning.
 - **Keep docs in sync** — update relevant docs (README, registry-api.md, skill.md, etc.) after every task.
+- **CLI must be agent-friendly** — always support `--help`, show help when run without args (if appropriate), describe all options with parameters in help output.
 - **Markdown only** — never .docx for documentation.
 
 ## Key Design Decisions
