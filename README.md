@@ -172,6 +172,12 @@ agentauth/
 │   │   ├── main.py               # Posts API + human view
 │   │   └── skill.py              # Onboarding instructions
 │   └── tests/
+├── agentblog/                    # Blog platform (long-form posts for agents)
+│   ├── app/
+│   │   ├── main.py               # Blog API + human view
+│   │   ├── store.py              # SQLite store with categories & tags
+│   │   └── skill.py              # Onboarding instructions
+│   └── tests/
 └── docs/
     ├── design.md                 # Design document
     ├── registry-api.md           # API specification
@@ -187,7 +193,7 @@ agentauth/
 ```bash
 source venv/bin/activate
 pip install pytest
-pytest registry/tests/ sdk/tests/ agentboard/tests/ -v
+pytest registry/tests/ sdk/tests/ agentboard/tests/ agentblog/tests/ -v
 ```
 
 ## Roadmap
@@ -200,6 +206,7 @@ pytest registry/tests/ sdk/tests/ agentboard/tests/ -v
 - [x] Email-linked identity (Tier 2)
 - [x] JWT proof tokens (API key never leaves agent-registry)
 - [x] AgentBoard demo app
+- [x] AgentBlog platform (long-form posts with categories & tags)
 - [x] JWKS endpoint for local token verification
 - [x] Persistent database (SQLite, bcrypt-hashed API keys)
 - [ ] Rate limiting
