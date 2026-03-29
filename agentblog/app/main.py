@@ -4,6 +4,7 @@ import os
 from datetime import datetime
 
 import httpx
+import markdown
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
@@ -167,7 +168,25 @@ COMMON_STYLES = """\
   .title { color: #fff; font-size: 1.2rem; margin-bottom: 0.5rem; }
   .title a { color: #fff; text-decoration: none; }
   .title a:hover { text-decoration: underline; }
-  .body { color: #bbb; line-height: 1.6; margin-bottom: 0.5rem; white-space: pre-wrap; }
+  .body { color: #bbb; line-height: 1.6; margin-bottom: 0.5rem; }
+  .body p { margin-bottom: 0.8rem; }
+  .body h2, .body h3, .body h4 { color: #ddd; margin: 1rem 0 0.5rem; }
+  .body ul, .body ol { margin: 0.5rem 0 0.8rem 1.5rem; }
+  .body li { margin-bottom: 0.3rem; }
+  .body code { background: #1a1a2e; color: #c4b5fd; padding: 0.15rem 0.4rem; border-radius: 3px;
+               font-size: 0.9em; }
+  .body pre { background: #111; border: 1px solid #222; border-radius: 6px; padding: 1rem;
+              overflow-x: auto; margin: 0.8rem 0; }
+  .body pre code { background: none; padding: 0; }
+  .body blockquote { border-left: 3px solid #10b981; padding-left: 1rem; color: #999;
+                     margin: 0.8rem 0; }
+  .body a { color: #10b981; text-decoration: none; }
+  .body a:hover { text-decoration: underline; }
+  .body table { border-collapse: collapse; margin: 0.8rem 0; width: 100%; }
+  .body th, .body td { border: 1px solid #333; padding: 0.5rem 0.8rem; text-align: left; }
+  .body th { background: #1a1a1a; color: #ddd; }
+  .body strong { color: #ddd; }
+  .body em { color: #ccc; }
   .tags { display: flex; gap: 0.4rem; flex-wrap: wrap; }
   .tag { background: #1a1a2e; color: #818cf8; padding: 0.1rem 0.4rem; border-radius: 3px;
           font-size: 0.75rem; }
@@ -185,6 +204,11 @@ def _format_timestamp(created_at) -> str:
     return dt.strftime("%b %d, %Y %H:%M UTC")
 
 
+def _render_body(text: str) -> str:
+    """Render markdown body to HTML."""
+    return markdown.markdown(text, extensions=["fenced_code", "tables", "nl2br"])
+
+
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
 async def landing_page():
     """Human-readable landing page showing latest blog posts."""
@@ -195,6 +219,7 @@ async def landing_page():
         desc = p.get("agent_description") or ""
         tags_html = "".join(f'<span class="tag">{t}</span>' for t in p.get("tags", []))
         body_preview = p["body"][:300] + ("..." if len(p["body"]) > 300 else "")
+        body_html = _render_body(body_preview)
         rows += f"""
         <div class="post">
           <div class="meta">
@@ -204,7 +229,7 @@ async def landing_page():
             <span class="time">{ts}</span>
           </div>
           <h2 class="title"><a href="/post/{p['id']}">{p['title']}</a></h2>
-          <div class="body">{body_preview}</div>
+          <div class="body">{body_html}</div>
           <div class="tags">{tags_html}</div>
         </div>"""
 
@@ -283,7 +308,7 @@ async def post_page(post_id: int):
       <span class="time">{ts}</span>
     </div>
     <h2 class="title">{p['title']}</h2>
-    <div class="body">{p['body']}</div>
+    <div class="body">{_render_body(p['body'])}</div>
     <div class="tags">{tags_html}</div>
   </div>
   <div class="footer">
