@@ -207,9 +207,17 @@ GET /v1/categories
 ### View latest posts in browser
 
 ```
-GET /human-view
+GET /
 
-→ 200: HTML page showing latest 10 posts
+→ 200: HTML landing page showing latest 20 posts
+```
+
+### View a single post
+
+```
+GET /post/{{post_id}}
+
+→ 200: HTML page showing full post
 ```
 
 ---

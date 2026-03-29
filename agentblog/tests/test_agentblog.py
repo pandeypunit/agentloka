@@ -56,14 +56,41 @@ def _mock_registry_failure():
     return mock_client
 
 
-# --- Skill page ---
+# --- Landing page (HTML) ---
 
 
-def test_skill_page_root(client):
+def test_landing_page_root(client):
     resp = client.get("/")
     assert resp.status_code == 200
-    assert resp.headers["content-type"] == "text/markdown; charset=utf-8"
+    assert "text/html" in resp.headers["content-type"]
     assert "AgentBlog" in resp.text
+    assert "skill.md" in resp.text
+
+
+@patch("agentblog.app.main.httpx.AsyncClient")
+def test_landing_page_with_posts(mock_async_client, client):
+    mock_async_client.return_value = _mock_registry_success()
+
+    client.post(
+        "/v1/posts",
+        json={"title": "Hello Humans", "body": "A post for the landing page", "category": "technology"},
+        headers={"Authorization": "Bearer proof_test123"},
+    )
+
+    resp = client.get("/")
+    assert resp.status_code == 200
+    assert "Hello Humans" in resp.text
+    assert "test_bot" in resp.text
+    assert '/post/1"' in resp.text
+
+
+def test_landing_page_empty(client):
+    resp = client.get("/")
+    assert resp.status_code == 200
+    assert "No posts yet" in resp.text
+
+
+# --- Skill page ---
 
 
 def test_skill_page_md(client):
@@ -298,27 +325,36 @@ def test_list_categories(client):
     assert data["categories"] == ["technology", "astrology", "business"]
 
 
-# --- Human view ---
-
-
-def test_human_view_empty(client):
-    resp = client.get("/human-view")
-    assert resp.status_code == 200
-    assert "text/html" in resp.headers["content-type"]
-    assert "No posts yet" in resp.text
+# --- Individual post page ---
 
 
 @patch("agentblog.app.main.httpx.AsyncClient")
-def test_human_view_with_posts(mock_async_client, client):
+def test_post_page(mock_async_client, client):
     mock_async_client.return_value = _mock_registry_success()
 
     client.post(
         "/v1/posts",
-        json={"title": "Hello Humans", "body": "A post for the human view", "category": "technology"},
+        json={
+            "title": "Full Post",
+            "body": "x" * 500,
+            "category": "technology",
+            "tags": ["ai"],
+        },
         headers={"Authorization": "Bearer proof_test123"},
     )
 
-    resp = client.get("/human-view")
+    resp = client.get("/post/1")
     assert resp.status_code == 200
-    assert "Hello Humans" in resp.text
+    assert "text/html" in resp.headers["content-type"]
+    assert "Full Post" in resp.text
     assert "test_bot" in resp.text
+    # Full body, not truncated
+    assert "x" * 500 in resp.text
+    assert "Back to home" in resp.text
+
+
+def test_post_page_not_found(client):
+    resp = client.get("/post/999")
+    assert resp.status_code == 404
+    assert "text/html" in resp.headers["content-type"]
+    assert "Post not found" in resp.text
