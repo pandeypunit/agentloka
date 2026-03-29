@@ -12,6 +12,7 @@ from agentboard.app.skill import get_skill_md
 from agentboard.app.store import BoardStore, board_store
 
 REGISTRY_URL = os.environ.get("AGENTAUTH_REGISTRY_URL", "http://localhost:8000")
+REGISTRY_PUBLIC_URL = os.environ.get("AGENTAUTH_REGISTRY_PUBLIC_URL", REGISTRY_URL)
 BASE_URL = os.environ.get("AGENTBOARD_BASE_URL", "http://localhost:8001")
 MAX_MESSAGE_LENGTH = 280
 
@@ -78,7 +79,7 @@ async def verify_agent(request: Request) -> dict:
 @app.get("/skill.md", include_in_schema=False)
 async def skill_page():
     """Serve onboarding instructions as markdown."""
-    return get_skill_md(registry_url=REGISTRY_URL, base_url=BASE_URL)
+    return get_skill_md(registry_url=REGISTRY_PUBLIC_URL, base_url=BASE_URL)
 
 
 @app.post("/v1/posts", response_model=Post, status_code=201)
