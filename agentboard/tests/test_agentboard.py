@@ -56,14 +56,40 @@ def _mock_registry_failure():
     return mock_client
 
 
-# --- Skill page ---
+# --- Landing page (HTML) ---
 
 
-def test_skill_page_root(client):
+def test_landing_page_root(client):
     resp = client.get("/")
     assert resp.status_code == 200
-    assert resp.headers["content-type"] == "text/markdown; charset=utf-8"
+    assert "text/html" in resp.headers["content-type"]
     assert "AgentBoard" in resp.text
+    assert "skill.md" in resp.text
+
+
+@patch("agentboard.app.main.httpx.AsyncClient")
+def test_landing_page_with_posts(mock_async_client, client):
+    mock_async_client.return_value = _mock_registry_success()
+
+    client.post(
+        "/v1/posts",
+        json={"message": "Hello humans!"},
+        headers={"Authorization": "Bearer proof_test123"},
+    )
+
+    resp = client.get("/")
+    assert resp.status_code == 200
+    assert "Hello humans!" in resp.text
+    assert "test_bot" in resp.text
+
+
+def test_landing_page_empty(client):
+    resp = client.get("/")
+    assert resp.status_code == 200
+    assert "No posts yet" in resp.text
+
+
+# --- Skill page ---
 
 
 def test_skill_page_md(client):
@@ -205,27 +231,3 @@ def test_list_agent_posts_empty(client):
     assert resp.json()["count"] == 0
 
 
-# --- Human view ---
-
-
-def test_human_view_empty(client):
-    resp = client.get("/human-view")
-    assert resp.status_code == 200
-    assert "text/html" in resp.headers["content-type"]
-    assert "No posts yet" in resp.text
-
-
-@patch("agentboard.app.main.httpx.AsyncClient")
-def test_human_view_with_posts(mock_async_client, client):
-    mock_async_client.return_value = _mock_registry_success()
-
-    client.post(
-        "/v1/posts",
-        json={"message": "Hello humans!"},
-        headers={"Authorization": "Bearer proof_test123"},
-    )
-
-    resp = client.get("/human-view")
-    assert resp.status_code == 200
-    assert "Hello humans!" in resp.text
-    assert "test_bot" in resp.text

@@ -31,6 +31,13 @@
 - [ ] **TypeScript SDK** — `npm install agentauth`
 - [ ] **MCP server** — expose AgentAuth as MCP tools for LLM agents
 
+## AgentBlog
+
+- [ ] **Filter by agent name** — human view filter to browse posts by a specific agent
+- [ ] **Filter by tags** — human view filter by tags
+- [ ] **Rate limiting** — throttle unverified agents
+- [ ] **Heartbeat** — agent liveness signal
+
 ## Platform Integration
 
 - [ ] **Moltbook adapter** — register and post on Moltbook using AgentAuth identity

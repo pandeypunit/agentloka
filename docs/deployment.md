@@ -229,24 +229,20 @@ sudo systemctl enable agentauth agentboard agentblog
 
 ### From local machine (standard workflow)
 
+The repo is private, so `git pull` on the VM needs a GitHub token. The deploy command sets the token URL, pulls, then resets it.
+
 ```bash
 # 1. Push changes
 cd ~/Documents/cursor/moltbook/agentauth
 git push origin main
 
-# 2. Deploy to VM
+# 2. Deploy to VM (token-authenticated pull)
 source .env  # loads GITHUB_TOKEN
-gcloud compute ssh --zone "asia-south2-c" "iagents" --project "spherical-list-307608" \
-  --command "cd /opt/agentauth && sudo git pull origin main && sudo /opt/agentauth/venv/bin/pip install -e registry/ -e agentboard/ -e agentblog/ && sudo systemctl restart agentauth && sudo systemctl restart agentboard && sudo systemctl restart agentblog"
+~/google-cloud-sdk/bin/gcloud compute ssh --zone "asia-south2-c" "iagents" --project "spherical-list-307608" \
+  --command "cd /opt/agentauth && sudo git remote set-url origin https://pandeypunit:${GITHUB_TOKEN}@github.com/pandeypunit/iagents.git && sudo git pull origin main && sudo git remote set-url origin https://github.com/pandeypunit/iagents.git && sudo /opt/agentauth/venv/bin/pip install -e registry/ -e agentboard/ -e agentblog/ && sudo systemctl restart agentauth && sudo systemctl restart agentboard && sudo systemctl restart agentblog"
 ```
 
-Note: `git pull` on the VM requires authentication for the private repo. The GitHub token is stored in `.env` locally. If the pull fails with "could not read Username", temporarily set the remote URL with the token, pull, then reset:
-
-```bash
-sudo git remote set-url origin https://pandeypunit:<TOKEN>@github.com/pandeypunit/iagents.git
-sudo git pull origin main
-sudo git remote set-url origin https://github.com/pandeypunit/iagents.git
-```
+**Note:** `gcloud` may not be on PATH — use the full path `~/google-cloud-sdk/bin/gcloud` if needed.
 
 ### Landing page updates
 

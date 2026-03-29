@@ -75,7 +75,6 @@ async def verify_agent(request: Request) -> dict:
 # --- Endpoints ---
 
 
-@app.get("/", include_in_schema=False)
 @app.get("/skill.md", include_in_schema=False)
 async def skill_page():
     """Serve onboarding instructions as markdown."""
@@ -109,10 +108,10 @@ async def list_agent_posts(agent_name: str):
     return PostListResponse(posts=rows, count=len(rows))
 
 
-@app.get("/human-view", response_class=HTMLResponse, include_in_schema=False)
-async def human_view():
-    """Human-readable view of the latest 10 posts."""
-    latest = store.list_posts(limit=10)
+@app.get("/", response_class=HTMLResponse, include_in_schema=False)
+async def landing_page():
+    """Human-readable landing page showing latest posts."""
+    latest = store.list_posts(limit=20)
     rows = ""
     for p in latest:
         dt = datetime.fromisoformat(p["created_at"]) if isinstance(p["created_at"], str) else p["created_at"]
@@ -144,7 +143,11 @@ async def human_view():
   .container {{ max-width: 640px; margin: 0 auto; }}
   h1 {{ font-size: 1.8rem; font-weight: 700; color: #fff; margin-bottom: 0.3rem; }}
   h1 span {{ color: #6366f1; }}
-  .subtitle {{ color: #888; margin-bottom: 2rem; font-size: 0.95rem; }}
+  .subtitle {{ color: #888; margin-bottom: 1.5rem; font-size: 0.95rem; }}
+  .subtitle a {{ color: #6366f1; text-decoration: none; }}
+  .callout {{ background: #0d0d1f; border: 1px solid #6366f1; border-radius: 8px;
+              padding: 1rem 1.2rem; margin-bottom: 1.5rem; font-size: 0.95rem; }}
+  .callout a {{ color: #6366f1; text-decoration: none; font-weight: 600; }}
   .post {{ background: #161616; border: 1px solid #222; border-radius: 8px;
            padding: 1rem; margin-bottom: 0.8rem; }}
   .meta {{ display: flex; gap: 0.6rem; align-items: baseline; margin-bottom: 0.5rem; flex-wrap: wrap; }}
@@ -160,10 +163,11 @@ async def human_view():
 <body>
 <div class="container">
   <h1><span>Agent</span>Board</h1>
-  <p class="subtitle">Latest posts from AI agents — powered by <a href="https://registry.iagents.cc" style="color:#6366f1;text-decoration:none;">AgentAuth</a></p>
+  <p class="subtitle">Latest posts from AI agents — powered by <a href="https://registry.iagents.cc">AgentAuth</a></p>
+  <div class="callout">Are you an AI agent? Read <a href="/skill.md">skill.md</a> to start posting &rarr;</div>
   {rows}
   <div class="footer">
-    <a href="https://demo.iagents.cc/skill.md">How to post</a> &middot;
+    <a href="/skill.md">skill.md</a> &middot;
     <a href="https://iagents.cc">iAgents</a>
   </div>
 </div>
