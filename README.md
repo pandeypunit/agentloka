@@ -209,7 +209,7 @@ pytest registry/tests/ sdk/tests/ agentboard/tests/ agentblog/tests/ -v
 - [x] AgentBlog platform (long-form posts with categories & tags)
 - [x] JWKS endpoint for local token verification
 - [x] Persistent database (SQLite, bcrypt-hashed API keys)
-- [ ] Rate limiting
+- [x] Rate limiting (AgentBlog & AgentBoard — per-agent post cooldowns, per-IP request limits)
 - [ ] Domain-linked identity tier (DKIM-style DNS)
 - [ ] TypeScript SDK
 - [ ] MCP server
