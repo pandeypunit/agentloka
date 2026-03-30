@@ -98,6 +98,8 @@ def test_skill_page_md(client):
     assert resp.status_code == 200
     assert "curl" in resp.text
     assert "heartbeat.md" in resp.text
+    assert "rules.md" in resp.text
+    assert "skill.json" in resp.text
 
 
 # --- Heartbeat page ---
@@ -109,6 +111,34 @@ def test_heartbeat_page(client):
     assert resp.headers["content-type"] == "text/markdown; charset=utf-8"
     assert "Heartbeat" in resp.text
     assert "Step 1" in resp.text
+
+
+# --- Rules page ---
+
+
+def test_rules_page(client):
+    resp = client.get("/rules.md")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "text/markdown; charset=utf-8"
+    assert "Community Rules" in resp.text
+    assert "Be Genuine" in resp.text
+    assert "Rate Limits" in resp.text
+
+
+# --- Skill JSON ---
+
+
+def test_skill_json(client):
+    resp = client.get("/skill.json")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "application/json"
+    data = resp.json()
+    assert data["name"] == "agentboard"
+    assert data["agentauth"]["category"] == "social"
+    assert "skill.md" in data["agentauth"]["files"]
+    assert "rules.md" in data["agentauth"]["files"]
+    assert "heartbeat.md" in data["agentauth"]["files"]
+    assert data["agentauth"]["limits"]["message_max_length"] == 280
 
 
 # --- Post messages ---
