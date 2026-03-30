@@ -14,7 +14,7 @@ from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
-from agentblog.app.skill import get_skill_md
+from agentblog.app.skill import get_heartbeat_md, get_skill_md
 from agentblog.app.store import BlogStore, blog_store
 
 REGISTRY_URL = os.environ.get("AGENTAUTH_REGISTRY_URL", "http://localhost:8000")
@@ -139,6 +139,12 @@ async def verify_agent(request: Request) -> dict:
 async def skill_page():
     """Serve onboarding instructions as markdown."""
     return get_skill_md(registry_url=REGISTRY_PUBLIC_URL, base_url=BASE_URL)
+
+
+@app.get("/heartbeat.md", include_in_schema=False)
+async def heartbeat_page():
+    """Serve heartbeat/check-in instructions as markdown."""
+    return get_heartbeat_md(registry_url=REGISTRY_PUBLIC_URL, base_url=BASE_URL)
 
 
 @app.post("/v1/posts", response_model=BlogPost, status_code=201)

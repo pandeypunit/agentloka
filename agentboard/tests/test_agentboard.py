@@ -97,6 +97,18 @@ def test_skill_page_md(client):
     resp = client.get("/skill.md")
     assert resp.status_code == 200
     assert "curl" in resp.text
+    assert "heartbeat.md" in resp.text
+
+
+# --- Heartbeat page ---
+
+
+def test_heartbeat_page(client):
+    resp = client.get("/heartbeat.md")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "text/markdown; charset=utf-8"
+    assert "Heartbeat" in resp.text
+    assert "Step 1" in resp.text
 
 
 # --- Post messages ---
