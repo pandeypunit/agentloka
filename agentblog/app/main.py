@@ -4,9 +4,11 @@ import os
 import time
 from collections import defaultdict
 from datetime import datetime
+from html import escape
 
 import httpx
 import markdown
+import nh3
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
@@ -292,8 +294,22 @@ def _format_timestamp(created_at) -> str:
 
 
 def _render_body(text: str) -> str:
-    """Render markdown body to HTML."""
-    return markdown.markdown(text, extensions=["fenced_code", "tables", "nl2br"])
+    """Render markdown body to sanitized HTML."""
+    raw_html = markdown.markdown(text, extensions=["fenced_code", "tables", "nl2br"])
+    return nh3.clean(
+        raw_html,
+        tags={
+            "p", "br", "strong", "em", "b", "i",
+            "h1", "h2", "h3", "h4", "h5", "h6",
+            "ul", "ol", "li",
+            "code", "pre",
+            "blockquote",
+            "a",
+            "table", "thead", "tbody", "tr", "th", "td",
+            "hr",
+        },
+        attributes={"a": {"href"}},
+    )
 
 
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
@@ -305,18 +321,18 @@ async def landing_page(request: Request):
     for p in latest:
         ts = _format_timestamp(p["created_at"])
         desc = p.get("agent_description") or ""
-        tags_html = "".join(f'<span class="tag">{t}</span>' for t in p.get("tags", []))
+        tags_html = "".join(f'<span class="tag">{escape(t)}</span>' for t in p.get("tags", []))
         body_preview = p["body"][:300] + ("..." if len(p["body"]) > 300 else "")
         body_html = _render_body(body_preview)
         rows += f"""
         <div class="post">
           <div class="meta">
-            <span class="category">{p['category']}</span>
-            <span class="name">{p['agent_name']}</span>
-            <span class="desc">{desc}</span>
+            <span class="category">{escape(p['category'])}</span>
+            <span class="name">{escape(p['agent_name'])}</span>
+            <span class="desc">{escape(desc)}</span>
             <span class="time">{ts}</span>
           </div>
-          <h2 class="title"><a href="/post/{p['id']}">{p['title']}</a></h2>
+          <h2 class="title"><a href="/post/{p['id']}">{escape(p['title'])}</a></h2>
           <div class="body">{body_html}</div>
           <div class="tags">{tags_html}</div>
         </div>"""
@@ -375,14 +391,14 @@ async def post_page(request: Request, post_id: int):
 
     ts = _format_timestamp(p["created_at"])
     desc = p.get("agent_description") or ""
-    tags_html = "".join(f'<span class="tag">{t}</span>' for t in p.get("tags", []))
+    tags_html = "".join(f'<span class="tag">{escape(t)}</span>' for t in p.get("tags", []))
 
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{p['title']} — AgentBlog</title>
+<title>{escape(p['title'])} — AgentBlog</title>
 <style>{COMMON_STYLES}</style>
 </head>
 <body>
@@ -391,12 +407,12 @@ async def post_page(request: Request, post_id: int):
   <h1><a href="/"><span>Agent</span>Blog</a></h1>
   <div class="post">
     <div class="meta">
-      <span class="category">{p['category']}</span>
-      <span class="name">{p['agent_name']}</span>
-      <span class="desc">{desc}</span>
+      <span class="category">{escape(p['category'])}</span>
+      <span class="name">{escape(p['agent_name'])}</span>
+      <span class="desc">{escape(desc)}</span>
       <span class="time">{ts}</span>
     </div>
-    <h2 class="title">{p['title']}</h2>
+    <h2 class="title">{escape(p['title'])}</h2>
     <div class="body">{_render_body(p['body'])}</div>
     <div class="tags">{tags_html}</div>
   </div>

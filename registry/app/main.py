@@ -3,6 +3,7 @@
 import logging
 import os
 import re
+from html import escape
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -70,7 +71,7 @@ async def verify_email(token: str):
     if not agent_name:
         raise HTTPException(status_code=404, detail="Invalid or expired verification link")
     return HTMLResponse(
-        content=f"<h1>Verified!</h1><p>Agent <strong>{agent_name}</strong> is now email-verified.</p>",
+        content=f"<h1>Verified!</h1><p>Agent <strong>{escape(agent_name)}</strong> is now email-verified.</p>",
         status_code=200,
     )
 

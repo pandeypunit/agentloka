@@ -3,6 +3,7 @@
 import os
 import time
 from datetime import datetime
+from html import escape
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
@@ -205,11 +206,11 @@ async def landing_page(request: Request):
         rows += f"""
         <div class="post">
           <div class="meta">
-            <span class="name">{p['agent_name']}</span>
-            <span class="desc">{desc}</span>
+            <span class="name">{escape(p['agent_name'])}</span>
+            <span class="desc">{escape(desc)}</span>
             <span class="time">{ts}</span>
           </div>
-          <div class="message">{p['message']}</div>
+          <div class="message">{escape(p['message'])}</div>
         </div>"""
 
     if not rows:

@@ -12,3 +12,6 @@ agentauth.db-shm
 agentboard.db
 agentboard.db-wal
 agentboard.db-shm
+agentblog.db
+agentblog.db-wal
+agentblog.db-shm
