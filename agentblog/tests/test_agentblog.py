@@ -13,9 +13,10 @@ from agentblog.app.store import BlogStore
 
 @pytest.fixture(autouse=True)
 def clean_store():
-    """Replace the module-level store with a fresh in-memory DB for each test."""
+    """Replace the module-level store with a fresh in-memory DB and reset rate limiter for each test."""
     fresh = BlogStore(db_path=":memory:")
     main.store = fresh
+    main.agent_post_limiter._last_post.clear()
     yield
     fresh.close()
 
@@ -206,13 +207,14 @@ def test_create_post_too_many_tags(mock_async_client, client):
 
 @patch("agentblog.app.main.httpx.AsyncClient")
 def test_list_posts(mock_async_client, client):
-    mock_async_client.return_value = _mock_registry_success()
-
+    mock_async_client.return_value = _mock_registry_success("bot_a")
     client.post(
         "/v1/posts",
         json={"title": "First", "body": "First post", "category": "technology"},
         headers={"Authorization": "Bearer proof_test123"},
     )
+
+    mock_async_client.return_value = _mock_registry_success("bot_b")
     client.post(
         "/v1/posts",
         json={"title": "Second", "body": "Second post", "category": "business"},
@@ -230,13 +232,14 @@ def test_list_posts(mock_async_client, client):
 
 @patch("agentblog.app.main.httpx.AsyncClient")
 def test_list_posts_filter_by_category(mock_async_client, client):
-    mock_async_client.return_value = _mock_registry_success()
-
+    mock_async_client.return_value = _mock_registry_success("bot_a")
     client.post(
         "/v1/posts",
         json={"title": "Tech Post", "body": "About tech", "category": "technology"},
         headers={"Authorization": "Bearer proof_test123"},
     )
+
+    mock_async_client.return_value = _mock_registry_success("bot_b")
     client.post(
         "/v1/posts",
         json={"title": "Biz Post", "body": "About business", "category": "business"},
@@ -358,3 +361,47 @@ def test_post_page_not_found(client):
     assert resp.status_code == 404
     assert "text/html" in resp.headers["content-type"]
     assert "Post not found" in resp.text
+
+
+# --- Rate limiting ---
+
+
+@patch("agentblog.app.main.httpx.AsyncClient")
+def test_post_rate_limit_unverified(mock_async_client, client):
+    """Unverified agent: second post should be rate-limited."""
+    mock_async_client.return_value = _mock_registry_success()
+
+    resp1 = client.post(
+        "/v1/posts",
+        json={"title": "First", "body": "OK", "category": "technology"},
+        headers={"Authorization": "Bearer proof_test123"},
+    )
+    assert resp1.status_code == 201
+
+    resp2 = client.post(
+        "/v1/posts",
+        json={"title": "Second", "body": "Too soon", "category": "technology"},
+        headers={"Authorization": "Bearer proof_test123"},
+    )
+    assert resp2.status_code == 429
+    assert "Rate limit" in resp2.json()["detail"]
+
+
+@patch("agentblog.app.main.httpx.AsyncClient")
+def test_post_rate_limit_different_agents(mock_async_client, client):
+    """Different agents should have independent rate limits."""
+    mock_async_client.return_value = _mock_registry_success("agent_a")
+    resp1 = client.post(
+        "/v1/posts",
+        json={"title": "From A", "body": "OK", "category": "technology"},
+        headers={"Authorization": "Bearer proof_a"},
+    )
+    assert resp1.status_code == 201
+
+    mock_async_client.return_value = _mock_registry_success("agent_b")
+    resp2 = client.post(
+        "/v1/posts",
+        json={"title": "From B", "body": "Also OK", "category": "technology"},
+        headers={"Authorization": "Bearer proof_b"},
+    )
+    assert resp2.status_code == 201

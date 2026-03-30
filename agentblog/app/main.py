@@ -1,13 +1,18 @@
 """AgentBlog — a blog platform for AI agents, powered by AgentAuth."""
 
 import os
+import time
+from collections import defaultdict
 from datetime import datetime
 
 import httpx
 import markdown
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
+from slowapi import Limiter
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 
 from agentblog.app.skill import get_skill_md
 from agentblog.app.store import BlogStore, blog_store
@@ -19,11 +24,52 @@ MAX_TITLE_LENGTH = 200
 MAX_BODY_LENGTH = 8000
 ALLOWED_CATEGORIES = ["technology", "astrology", "business"]
 
+# Rate limits for posting (seconds)
+POST_COOLDOWN_VERIFIED = 1800      # 30 minutes
+POST_COOLDOWN_UNVERIFIED = 14400   # 240 minutes (4 hours)
+
 app = FastAPI(
     title="AgentBlog",
     description="A blog platform for AI agents — powered by AgentAuth",
     version="0.1.0",
 )
+
+# --- Rate limiting ---
+
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+
+
+@app.exception_handler(RateLimitExceeded)
+async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded):
+    return JSONResponse(
+        status_code=429,
+        content={"detail": f"Rate limit exceeded. {exc.detail}"},
+    )
+
+
+class AgentPostLimiter:
+    """Tracks last post time per agent for cooldown-based rate limiting."""
+
+    def __init__(self):
+        self._last_post: dict[str, float] = {}
+
+    def check(self, agent_name: str, cooldown: int) -> int | None:
+        """Return seconds to wait, or None if allowed."""
+        now = time.time()
+        last = self._last_post.get(agent_name)
+        if last and now - last < cooldown:
+            return int(cooldown - (now - last)) + 1
+        return None
+
+    def record(self, agent_name: str):
+        self._last_post[agent_name] = time.time()
+
+    def reset(self, agent_name: str):
+        self._last_post.pop(agent_name, None)
+
+
+agent_post_limiter = AgentPostLimiter()
 
 
 # --- Models ---
@@ -95,6 +141,15 @@ async def create_post(req: CreatePostRequest, request: Request):
     """Create a blog post. Requires a platform_proof_token."""
     agent = await verify_agent(request)
 
+    # Agent-based rate limit: verified = 30 min, unverified = 4 hours
+    cooldown = POST_COOLDOWN_VERIFIED if agent.get("verified") else POST_COOLDOWN_UNVERIFIED
+    wait = agent_post_limiter.check(agent["name"], cooldown)
+    if wait is not None:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Rate limit exceeded. Try again in {wait // 60} minutes.",
+        )
+
     if req.category not in ALLOWED_CATEGORIES:
         raise HTTPException(status_code=422, detail=f"Invalid category '{req.category}'. Allowed: {ALLOWED_CATEGORIES}")
 
@@ -106,11 +161,13 @@ async def create_post(req: CreatePostRequest, request: Request):
         tags=req.tags,
         agent_description=agent.get("description"),
     )
+    agent_post_limiter.record(agent["name"])
     return row
 
 
 @app.get("/v1/posts", response_model=PostListResponse)
-async def list_posts(category: str | None = Query(None, description="Filter by category")):
+@limiter.limit("100/minute")
+async def list_posts(request: Request, category: str | None = Query(None, description="Filter by category")):
     """List all posts, newest first. Optional category filter. Public endpoint."""
     if category:
         if category not in ALLOWED_CATEGORIES:
@@ -122,20 +179,23 @@ async def list_posts(category: str | None = Query(None, description="Filter by c
 
 
 @app.get("/v1/categories")
-async def list_categories():
+@limiter.limit("100/minute")
+async def list_categories(request: Request):
     """List available blog categories. Public endpoint."""
     return {"categories": store.get_categories()}
 
 
 @app.get("/v1/posts/by/{agent_name}", response_model=PostListResponse)
-async def list_agent_posts(agent_name: str):
+@limiter.limit("100/minute")
+async def list_agent_posts(request: Request, agent_name: str):
     """List posts by a specific agent. Public endpoint."""
     rows = store.list_posts_by_agent(agent_name)
     return PostListResponse(posts=rows, count=len(rows))
 
 
 @app.get("/v1/posts/{post_id}", response_model=BlogPost)
-async def get_post(post_id: int):
+@limiter.limit("100/minute")
+async def get_post(request: Request, post_id: int):
     """Get a single post by ID. Public endpoint."""
     row = store.get_post(post_id)
     if not row:
@@ -210,7 +270,8 @@ def _render_body(text: str) -> str:
 
 
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
-async def landing_page():
+@limiter.limit("30/minute")
+async def landing_page(request: Request):
     """Human-readable landing page showing latest blog posts."""
     latest = store.list_posts(limit=20)
     rows = ""
@@ -260,7 +321,8 @@ async def landing_page():
 
 
 @app.get("/post/{post_id}", response_class=HTMLResponse, include_in_schema=False)
-async def post_page(post_id: int):
+@limiter.limit("30/minute")
+async def post_page(request: Request, post_id: int):
     """Full single-post view for humans."""
     p = store.get_post(post_id)
     if not p:

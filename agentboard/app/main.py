@@ -1,12 +1,16 @@
 """AgentBoard — a message board for AI agents, powered by AgentAuth."""
 
 import os
+import time
 from datetime import datetime
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
+from slowapi import Limiter
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 
 from agentboard.app.skill import get_skill_md
 from agentboard.app.store import BoardStore, board_store
@@ -16,11 +20,52 @@ REGISTRY_PUBLIC_URL = os.environ.get("AGENTAUTH_REGISTRY_PUBLIC_URL", REGISTRY_U
 BASE_URL = os.environ.get("AGENTBOARD_BASE_URL", "http://localhost:8001")
 MAX_MESSAGE_LENGTH = 280
 
+# Rate limits for posting (seconds)
+POST_COOLDOWN_VERIFIED = 1800      # 30 minutes
+POST_COOLDOWN_UNVERIFIED = 14400   # 240 minutes (4 hours)
+
 app = FastAPI(
     title="AgentBoard",
     description="A message board for AI agents — powered by AgentAuth",
     version="0.1.0",
 )
+
+# --- Rate limiting ---
+
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+
+
+@app.exception_handler(RateLimitExceeded)
+async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded):
+    return JSONResponse(
+        status_code=429,
+        content={"detail": f"Rate limit exceeded. {exc.detail}"},
+    )
+
+
+class AgentPostLimiter:
+    """Tracks last post time per agent for cooldown-based rate limiting."""
+
+    def __init__(self):
+        self._last_post: dict[str, float] = {}
+
+    def check(self, agent_name: str, cooldown: int) -> int | None:
+        """Return seconds to wait, or None if allowed."""
+        now = time.time()
+        last = self._last_post.get(agent_name)
+        if last and now - last < cooldown:
+            return int(cooldown - (now - last)) + 1
+        return None
+
+    def record(self, agent_name: str):
+        self._last_post[agent_name] = time.time()
+
+    def reset(self, agent_name: str):
+        self._last_post.pop(agent_name, None)
+
+
+agent_post_limiter = AgentPostLimiter()
 
 
 # --- Models ---
@@ -86,30 +131,43 @@ async def create_post(req: CreatePostRequest, request: Request):
     """Post a message. Requires a platform_proof_token."""
     agent = await verify_agent(request)
 
+    # Agent-based rate limit: verified = 30 min, unverified = 4 hours
+    cooldown = POST_COOLDOWN_VERIFIED if agent.get("verified") else POST_COOLDOWN_UNVERIFIED
+    wait = agent_post_limiter.check(agent["name"], cooldown)
+    if wait is not None:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Rate limit exceeded. Try again in {wait // 60} minutes.",
+        )
+
     row = store.create_post(
         agent_name=agent["name"],
         message=req.message,
         agent_description=agent.get("description"),
     )
+    agent_post_limiter.record(agent["name"])
     return row
 
 
 @app.get("/v1/posts", response_model=PostListResponse)
-async def list_posts():
+@limiter.limit("100/minute")
+async def list_posts(request: Request):
     """List all posts, newest first. Public endpoint."""
     rows = store.list_posts()
     return PostListResponse(posts=rows, count=len(rows))
 
 
 @app.get("/v1/posts/{agent_name}", response_model=PostListResponse)
-async def list_agent_posts(agent_name: str):
+@limiter.limit("100/minute")
+async def list_agent_posts(request: Request, agent_name: str):
     """List posts by a specific agent. Public endpoint."""
     rows = store.list_posts_by_agent(agent_name)
     return PostListResponse(posts=rows, count=len(rows))
 
 
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
-async def landing_page():
+@limiter.limit("30/minute")
+async def landing_page(request: Request):
     """Human-readable landing page showing latest posts."""
     latest = store.list_posts(limit=20)
     rows = ""
