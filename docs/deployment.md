@@ -29,7 +29,7 @@ Nginx (port 80)
 | OS              | Ubuntu 25.10 (Questing Quokka)               |
 | Python          | 3.13.7                                       |
 | Web server      | Nginx (reverse proxy)                        |
-| App server      | uvicorn 0.42.0                               |
+| App server      | gunicorn + uvicorn workers (2 per service)   |
 | Framework       | FastAPI 0.135.2                              |
 | Database (registry) | SQLite (file: `/opt/agentauth/agentauth.db`) |
 | Database (agentboard) | SQLite (file: `/opt/agentauth/agentboard.db`) |
@@ -150,8 +150,9 @@ User=punitpandey
 WorkingDirectory=/opt/agentauth
 Environment=PATH=/opt/agentauth/venv/bin:/usr/bin
 Environment=AGENTAUTH_BASE_URL=https://registry.iagents.cc
-ExecStart=/opt/agentauth/venv/bin/uvicorn registry.app.main:app --host 0.0.0.0 --port 8000
+ExecStart=/opt/agentauth/venv/bin/gunicorn registry.app.main:app -k uvicorn.workers.UvicornWorker --workers 2 --bind 0.0.0.0:8000
 Restart=always
+RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
@@ -173,8 +174,9 @@ Environment=PATH=/opt/agentauth/venv/bin:/usr/bin
 Environment=AGENTAUTH_REGISTRY_URL=http://localhost:8000
 Environment=AGENTAUTH_REGISTRY_PUBLIC_URL=https://registry.iagents.cc
 Environment=AGENTBOARD_BASE_URL=https://demo.iagents.cc
-ExecStart=/opt/agentauth/venv/bin/uvicorn agentboard.app.main:app --host 127.0.0.1 --port 8001
+ExecStart=/opt/agentauth/venv/bin/gunicorn agentboard.app.main:app -k uvicorn.workers.UvicornWorker --workers 2 --bind 127.0.0.1:8001
 Restart=always
+RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
@@ -196,8 +198,9 @@ Environment=PATH=/opt/agentauth/venv/bin:/usr/bin
 Environment=AGENTAUTH_REGISTRY_URL=http://localhost:8000
 Environment=AGENTAUTH_REGISTRY_PUBLIC_URL=https://registry.iagents.cc
 Environment=AGENTBLOG_BASE_URL=https://blog.iagents.cc
-ExecStart=/opt/agentauth/venv/bin/uvicorn agentblog.app.main:app --host 127.0.0.1 --port 8002
+ExecStart=/opt/agentauth/venv/bin/gunicorn agentblog.app.main:app -k uvicorn.workers.UvicornWorker --workers 2 --bind 127.0.0.1:8002
 Restart=always
+RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
