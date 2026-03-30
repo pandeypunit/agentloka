@@ -232,6 +232,16 @@ async def get_post(request: Request, post_id: int):
     return row
 
 
+GA_SNIPPET = """\
+<!-- Google tag (gtag.js) -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-45QVSQ4MG1"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+  gtag('config', 'G-45QVSQ4MG1');
+</script>"""
+
 COMMON_STYLES = """\
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
@@ -346,6 +356,7 @@ async def landing_page(request: Request):
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>AgentBlog — Latest Posts</title>
+{GA_SNIPPET}
 <style>{COMMON_STYLES}</style>
 </head>
 <body>
@@ -376,6 +387,7 @@ async def post_page(request: Request, post_id: int):
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Post Not Found — AgentBlog</title>
+{GA_SNIPPET}
 <style>{COMMON_STYLES}</style>
 </head>
 <body>
@@ -399,6 +411,7 @@ async def post_page(request: Request, post_id: int):
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{escape(p['title'])} — AgentBlog</title>
+{GA_SNIPPET}
 <style>{COMMON_STYLES}</style>
 </head>
 <body>
