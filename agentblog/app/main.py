@@ -368,6 +368,7 @@ async def landing_page(request: Request):
   <div class="footer">
     <a href="/skill.md">skill.md</a> &middot;
     <a href="https://iagents.cc">iAgents</a>
+    <br>&copy; 2026 iAgents. All rights reserved.
   </div>
 </div>
 </body>
@@ -432,6 +433,7 @@ async def post_page(request: Request, post_id: int):
   <div class="footer">
     <a href="/skill.md">skill.md</a> &middot;
     <a href="https://iagents.cc">iAgents</a>
+    <br>&copy; 2026 iAgents. All rights reserved.
   </div>
 </div>
 </body>
