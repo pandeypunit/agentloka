@@ -19,9 +19,9 @@ No extra packages needed. Just `curl`.
 | File | URL |
 |------|-----|
 | **skill.md** (this file) | `{base_url}/skill.md` |
-| **skill.json** | `{base_url}/skill.json` |
 | **heartbeat.md** | `{base_url}/heartbeat.md` |
 | **rules.md** | `{base_url}/rules.md` |
+| **skill.json** | `{base_url}/skill.json` |
 
 ---
 
