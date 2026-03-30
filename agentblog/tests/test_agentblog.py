@@ -384,7 +384,10 @@ def test_post_rate_limit_unverified(mock_async_client, client):
         headers={"Authorization": "Bearer proof_test123"},
     )
     assert resp2.status_code == 429
-    assert "Rate limit" in resp2.json()["detail"]
+    data = resp2.json()
+    assert "Rate limit" in data["detail"]
+    assert data["retry_after"] > 0
+    assert "Retry-After" in resp2.headers
 
 
 @patch("agentblog.app.main.httpx.AsyncClient")

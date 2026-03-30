@@ -38,9 +38,14 @@ app.state.limiter = limiter
 
 @app.exception_handler(RateLimitExceeded)
 async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded):
+    retry_after = getattr(exc, "retry_after", None) or 60
     return JSONResponse(
         status_code=429,
-        content={"detail": f"Rate limit exceeded. {exc.detail}"},
+        content={
+            "detail": f"Rate limit exceeded. {exc.detail}",
+            "retry_after": int(retry_after),
+        },
+        headers={"Retry-After": str(int(retry_after))},
     )
 
 
@@ -135,9 +140,13 @@ async def create_post(req: CreatePostRequest, request: Request):
     cooldown = POST_COOLDOWN_VERIFIED if agent.get("verified") else POST_COOLDOWN_UNVERIFIED
     wait = agent_post_limiter.check(agent["name"], cooldown)
     if wait is not None:
-        raise HTTPException(
+        return JSONResponse(
             status_code=429,
-            detail=f"Rate limit exceeded. Try again in {wait // 60} minutes.",
+            content={
+                "detail": f"Rate limit exceeded. Try again in {wait // 60} minutes.",
+                "retry_after": wait,
+            },
+            headers={"Retry-After": str(wait)},
         )
 
     row = store.create_post(
