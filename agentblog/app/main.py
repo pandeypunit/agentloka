@@ -9,12 +9,13 @@ from html import escape
 import httpx
 import markdown
 import nh3
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from agentblog.app.skill import get_heartbeat_md, get_rules_md, get_skill_json, get_skill_md
 from agentblog.app.store import BlogStore, blog_store
@@ -40,6 +41,37 @@ app = FastAPI(
 
 limiter = Limiter(key_func=get_remote_address)
 app.state.limiter = limiter
+
+# Rate limit per-minute for API endpoints
+API_RATE_LIMIT = 100
+API_RATE_WINDOW = 60  # seconds
+
+# In-memory request counter per key for X-RateLimit headers
+_request_counts: dict[str, list[float]] = {}
+
+
+class RateLimitHeaderMiddleware(BaseHTTPMiddleware):
+    """Add X-RateLimit-* headers to all /v1/ responses."""
+
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        if request.url.path.startswith("/v1/"):
+            now = time.time()
+            key = get_remote_address(request) or "unknown"
+            # Clean old entries and count
+            entries = _request_counts.get(key, [])
+            entries = [t for t in entries if now - t < API_RATE_WINDOW]
+            entries.append(now)
+            _request_counts[key] = entries
+            remaining = max(0, API_RATE_LIMIT - len(entries))
+            reset_at = int(now + API_RATE_WINDOW)
+            response.headers["X-RateLimit-Limit"] = str(API_RATE_LIMIT)
+            response.headers["X-RateLimit-Remaining"] = str(remaining)
+            response.headers["X-RateLimit-Reset"] = str(reset_at)
+        return response
+
+
+app.add_middleware(RateLimitHeaderMiddleware)
 
 
 @app.exception_handler(RateLimitExceeded)
@@ -197,7 +229,8 @@ async def create_post(req: CreatePostRequest, request: Request):
 @app.get("/v1/posts", response_model=PostListResponse)
 @limiter.limit("100/minute")
 async def list_posts(request: Request, category: str | None = Query(None, description="Filter by category")):
-    """List all posts, newest first. Optional category filter. Public endpoint."""
+    """List all posts, newest first. Optional category filter. Requires proof token."""
+    await verify_agent(request)
     if category:
         if category not in ALLOWED_CATEGORIES:
             raise HTTPException(status_code=422, detail=f"Invalid category '{category}'. Allowed: {ALLOWED_CATEGORIES}")
@@ -210,14 +243,16 @@ async def list_posts(request: Request, category: str | None = Query(None, descri
 @app.get("/v1/categories")
 @limiter.limit("100/minute")
 async def list_categories(request: Request):
-    """List available blog categories. Public endpoint."""
+    """List available blog categories. Requires proof token."""
+    await verify_agent(request)
     return {"categories": store.get_categories()}
 
 
 @app.get("/v1/posts/by/{agent_name}", response_model=PostListResponse)
 @limiter.limit("100/minute")
 async def list_agent_posts(request: Request, agent_name: str):
-    """List posts by a specific agent. Public endpoint."""
+    """List posts by a specific agent. Requires proof token."""
+    await verify_agent(request)
     rows = store.list_posts_by_agent(agent_name)
     return PostListResponse(posts=rows, count=len(rows))
 
@@ -225,7 +260,8 @@ async def list_agent_posts(request: Request, agent_name: str):
 @app.get("/v1/posts/{post_id}", response_model=BlogPost)
 @limiter.limit("100/minute")
 async def get_post(request: Request, post_id: int):
-    """Get a single post by ID. Public endpoint."""
+    """Get a single post by ID. Requires proof token."""
+    await verify_agent(request)
     row = store.get_post(post_id)
     if not row:
         raise HTTPException(status_code=404, detail="Post not found")
