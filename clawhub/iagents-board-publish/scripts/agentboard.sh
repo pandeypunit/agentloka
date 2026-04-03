@@ -4,6 +4,8 @@
 CONFIG_FILE="${HOME}/.config/agentauth/credentials.json"
 REGISTRY_URL="https://registry.iagents.cc"
 API_BASE="https://demo.iagents.cc"
+# Browser-style User-Agent to avoid Cloudflare bot blocks (error 1010)
+UA="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
 
 # Pretty-print JSON if jq is available
 pp() { if command -v jq &> /dev/null; then jq .; else cat; fi; }
@@ -43,7 +45,8 @@ load_credentials() {
 get_proof_token() {
     local response
     response=$(curl -s -X POST "${REGISTRY_URL}/v1/agents/me/proof" \
-        -H "Authorization: Bearer ${SECRET_KEY}")
+        -H "Authorization: Bearer ${SECRET_KEY}" \
+        -H "User-Agent: ${UA}")
 
     local token
     if command -v jq &> /dev/null; then
@@ -67,7 +70,8 @@ case "${1:-}" in
         proof_token=$(get_proof_token) || exit 1
         echo "Fetching latest messages..."
         curl -s "${API_BASE}/v1/posts" \
-            -H "Authorization: Bearer ${proof_token}" | pp
+            -H "Authorization: Bearer ${proof_token}" \
+            -H "User-Agent: ${UA}" | pp
         ;;
     agent)
         agent_name="$2"
@@ -79,7 +83,8 @@ case "${1:-}" in
         proof_token=$(get_proof_token) || exit 1
         echo "Fetching messages by ${agent_name}..."
         curl -s "${API_BASE}/v1/posts/${agent_name}" \
-            -H "Authorization: Bearer ${proof_token}" | pp
+            -H "Authorization: Bearer ${proof_token}" \
+            -H "User-Agent: ${UA}" | pp
         ;;
     post)
         load_credentials || exit 1
@@ -111,6 +116,7 @@ ENDJSON
         curl -s -X POST "${API_BASE}/v1/posts" \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer ${proof_token}" \
+            -H "User-Agent: ${UA}" \
             -d @"$tmpfile" | pp
 
         rm -f "$tmpfile"
@@ -122,7 +128,8 @@ ENDJSON
             exit 0
         fi
         proof_result=$(curl -s -X POST "${REGISTRY_URL}/v1/agents/me/proof" \
-            -H "Authorization: Bearer ${SECRET_KEY}")
+            -H "Authorization: Bearer ${SECRET_KEY}" \
+            -H "User-Agent: ${UA}")
         if [[ "$proof_result" == *"platform_proof_token"* ]]; then
             echo "AgentAuth credentials valid (agent: ${AGENT_NAME})"
         else
@@ -135,7 +142,8 @@ ENDJSON
         echo "Testing AgentBoard API connection..."
         proof_token=$(get_proof_token) || exit 1
         result=$(curl -s "${API_BASE}/v1/posts" \
-            -H "Authorization: Bearer ${proof_token}")
+            -H "Authorization: Bearer ${proof_token}" \
+            -H "User-Agent: ${UA}")
         if [[ "$result" == *"posts"* ]]; then
             echo "API connection successful"
             if command -v jq &> /dev/null; then
