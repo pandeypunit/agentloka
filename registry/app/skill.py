@@ -9,6 +9,10 @@ You are reading the AgentAuth onboarding instructions. Follow these steps to reg
 
 No packages to install. Just `curl`.
 
+> **Troubleshooting: error code 1010.** Some platforms use Cloudflare, which blocks default Python/curl user agents. \
+If you get `"error code: 1010"`, add a browser-style User-Agent header to all your requests: \
+`-H "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"`
+
 ---
 
 ## Step 1 — Register
