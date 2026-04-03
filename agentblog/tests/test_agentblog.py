@@ -263,7 +263,8 @@ def test_list_posts(mock_async_client, client):
         headers={"Authorization": "Bearer proof_test123"},
     )
 
-    resp = client.get("/v1/posts")
+    mock_async_client.return_value = _mock_registry_success()
+    resp = client.get("/v1/posts", headers={"Authorization": "Bearer proof_read"})
     assert resp.status_code == 200
     data = resp.json()
     assert data["count"] == 2
@@ -288,15 +289,18 @@ def test_list_posts_filter_by_category(mock_async_client, client):
         headers={"Authorization": "Bearer proof_test123"},
     )
 
-    resp = client.get("/v1/posts?category=technology")
+    mock_async_client.return_value = _mock_registry_success()
+    resp = client.get("/v1/posts?category=technology", headers={"Authorization": "Bearer proof_read"})
     assert resp.status_code == 200
     data = resp.json()
     assert data["count"] == 1
     assert data["posts"][0]["title"] == "Tech Post"
 
 
-def test_list_posts_empty(client):
-    resp = client.get("/v1/posts")
+@patch("agentblog.app.main.httpx.AsyncClient")
+def test_list_posts_empty(mock_async_client, client):
+    mock_async_client.return_value = _mock_registry_success()
+    resp = client.get("/v1/posts", headers={"Authorization": "Bearer proof_read"})
     assert resp.status_code == 200
     assert resp.json()["count"] == 0
 
@@ -321,15 +325,18 @@ def test_list_agent_posts(mock_async_client, client):
         headers={"Authorization": "Bearer proof_beta"},
     )
 
-    resp = client.get("/v1/posts/by/alpha_bot")
+    mock_async_client.return_value = _mock_registry_success()
+    resp = client.get("/v1/posts/by/alpha_bot", headers={"Authorization": "Bearer proof_read"})
     assert resp.status_code == 200
     data = resp.json()
     assert data["count"] == 1
     assert data["posts"][0]["agent_name"] == "alpha_bot"
 
 
-def test_list_agent_posts_empty(client):
-    resp = client.get("/v1/posts/by/nobody")
+@patch("agentblog.app.main.httpx.AsyncClient")
+def test_list_agent_posts_empty(mock_async_client, client):
+    mock_async_client.return_value = _mock_registry_success()
+    resp = client.get("/v1/posts/by/nobody", headers={"Authorization": "Bearer proof_read"})
     assert resp.status_code == 200
     assert resp.json()["count"] == 0
 
@@ -347,7 +354,8 @@ def test_get_post(mock_async_client, client):
         headers={"Authorization": "Bearer proof_test123"},
     )
 
-    resp = client.get("/v1/posts/1")
+    mock_async_client.return_value = _mock_registry_success()
+    resp = client.get("/v1/posts/1", headers={"Authorization": "Bearer proof_read"})
     assert resp.status_code == 200
     data = resp.json()
     assert data["title"] == "Single Post"
@@ -355,16 +363,20 @@ def test_get_post(mock_async_client, client):
     assert data["tags"] == ["stars"]
 
 
-def test_get_post_not_found(client):
-    resp = client.get("/v1/posts/999")
+@patch("agentblog.app.main.httpx.AsyncClient")
+def test_get_post_not_found(mock_async_client, client):
+    mock_async_client.return_value = _mock_registry_success()
+    resp = client.get("/v1/posts/999", headers={"Authorization": "Bearer proof_read"})
     assert resp.status_code == 404
 
 
 # --- Categories ---
 
 
-def test_list_categories(client):
-    resp = client.get("/v1/categories")
+@patch("agentblog.app.main.httpx.AsyncClient")
+def test_list_categories(mock_async_client, client):
+    mock_async_client.return_value = _mock_registry_success()
+    resp = client.get("/v1/categories", headers={"Authorization": "Bearer proof_read"})
     assert resp.status_code == 200
     data = resp.json()
     assert data["categories"] == ["technology", "astrology", "business"]

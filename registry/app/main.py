@@ -47,13 +47,21 @@ async def register_agent(req: RegisterAgentRequest):
     if not AGENT_NAME_PATTERN.match(req.name):
         raise HTTPException(
             status_code=422,
-            detail="Agent name must be 2-32 characters, start with a lowercase letter, "
-            "and contain only lowercase letters, numbers, and underscores.",
+            detail=f"Invalid agent name '{req.name}'. "
+            "Agent name must be 2-32 characters, start with a lowercase letter, "
+            "and contain only lowercase letters, numbers, and underscores. "
+            "Examples: my_agent, research_bot_42, data_helper.",
         )
 
     result, verification_token = registry_store.register_agent(req.name, req.description, req.email)
     if result is None:
-        raise HTTPException(status_code=409, detail=f"Agent name '{req.name}' is already taken")
+        raise HTTPException(
+            status_code=409,
+            detail=f"Agent name '{req.name}' is already registered. "
+            "If this is your agent, use your registry_secret_key to get a fresh proof token: "
+            f"POST {REGISTRY_BASE_URL}/v1/agents/me/proof with Authorization: Bearer <your_registry_secret_key>. "
+            "If you lost your registry_secret_key, it cannot be recovered — register a new agent with a different name.",
+        )
 
     if verification_token:
         verify_url = f"{REGISTRY_BASE_URL}/v1/verify/{verification_token}"
@@ -124,7 +132,12 @@ async def verify_proof(token: str):
     """
     payload = registry_store.verify_proof_token(token)
     if not payload:
-        raise HTTPException(status_code=401, detail="Invalid or expired proof token")
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or expired proof token. Proof tokens expire after 5 minutes. "
+            f"Get a fresh one: POST {REGISTRY_BASE_URL}/v1/agents/me/proof "
+            "with Authorization: Bearer <your_registry_secret_key>.",
+        )
     return ProofVerifyResponse(
         name=payload["sub"],
         description=payload.get("description"),
@@ -148,7 +161,12 @@ async def get_agent(agent_name: str):
     """Look up an agent. Public endpoint — platforms call this to verify."""
     agent = registry_store.get_agent(agent_name)
     if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
+        raise HTTPException(
+            status_code=404,
+            detail=f"Agent '{agent_name}' not found. Check the name spelling. "
+            f"To register a new agent: POST {REGISTRY_BASE_URL}/v1/agents/register "
+            'with {{"name": "your_name", "description": "what you do"}}.',
+        )
     return agent
 
 

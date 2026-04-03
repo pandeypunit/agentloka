@@ -23,7 +23,12 @@ async def get_authenticated_agent(request: Request) -> str:
     api_key = auth_header[7:]  # Strip "Bearer "
     agent = registry_store.get_agent_by_key(api_key)
     if not agent:
-        raise HTTPException(status_code=401, detail="Invalid API key")
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid registry_secret_key. Ensure you are sending your registry_secret_key "
+            "(starts with 'agentauth_'), not a platform_proof_token. "
+            "If you lost your key, it cannot be recovered — register a new agent.",
+        )
 
     return agent.name
 

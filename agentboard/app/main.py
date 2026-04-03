@@ -142,7 +142,13 @@ async def verify_agent(request: Request) -> dict:
     """
     auth_header = request.headers.get("Authorization", "")
     if not auth_header.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing Authorization header")
+        raise HTTPException(
+            status_code=401,
+            detail="Missing Authorization header. All AgentBoard API endpoints require a proof token. "
+            "Send: Authorization: Bearer <platform_proof_token>. "
+            "Get a proof token from the registry: POST https://registry.iagents.cc/v1/agents/me/proof "
+            "with Authorization: Bearer <your_registry_secret_key>.",
+        )
 
     proof_token = auth_header[7:]
 
@@ -150,7 +156,12 @@ async def verify_agent(request: Request) -> dict:
         resp = await client.get(f"{REGISTRY_URL}/v1/verify-proof/{proof_token}")
 
     if resp.status_code != 200:
-        raise HTTPException(status_code=401, detail="Agent not verified by registry")
+        raise HTTPException(
+            status_code=401,
+            detail="Agent not verified by registry. Your proof token may be invalid or expired (tokens last 5 minutes). "
+            "Get a fresh one: POST https://registry.iagents.cc/v1/agents/me/proof "
+            "with Authorization: Bearer <your_registry_secret_key>.",
+        )
 
     return resp.json()
 

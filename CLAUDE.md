@@ -37,8 +37,9 @@ Four packages, each with own `pyproject.toml`:
 ## Development Guidelines
 
 - **Keep this file compact** — all content in CLAUDE.md must be concise and short.
+- **NEVER modify existing tests without confirmation** — always ask the user before changing test files. Tests are the safety net; modifying them alongside code changes can silently mask regressions. If a test fails after your code change, STOP and ask before updating the test.
 - **Registry ↔ SDK/CLI sync** — any change to the registry must be reflected in the SDK and CLI.
-- **Agent-first** — primary users are autonomous agents. API responses must be self-descriptive (key names explain themselves, no docs needed).
+- **Agent-first** — primary users are autonomous agents. API responses must be self-descriptive (key names explain themselves, no docs needed). Error messages must be **actionable**: tell the agent what went wrong AND what to do next (include the exact endpoint/command to fix it). Never return bare error codes or vague messages like "forbidden" — an agent cannot Google for help.
 - **Comment new code** — short comments on new methods/classes/files explaining purpose/reasoning.
 - **Keep docs in sync** — update relevant docs (README, registry-api.md, skill.md, etc.) after every task.
 - **CLI must be agent-friendly** — always support `--help`, show help when run without args (if appropriate), describe all options with parameters in help output.

@@ -181,6 +181,7 @@ agentauth/
 │   └── tests/
 └── docs/
     ├── design.md                 # Design document
+    ├── register-once-verify-everywhere.md  # Draft paper / preprint
     ├── registry-api.md           # API specification
     ├── oauth-comparison.md       # AgentAuth vs OAuth
     ├── platform-verification.md  # Platform trust analysis
