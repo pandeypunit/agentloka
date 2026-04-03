@@ -84,7 +84,10 @@ Production: `iagents.cc` on GCP VM (Ubuntu 25.10, asia-south2-c). Cloudflare DNS
 - `blog.iagents.cc` → :8002
 
 ```bash
+# Push + deploy (source .env loads GITHUB_TOKEN for private repo auth)
 source .env && git push origin main
-gcloud compute ssh --zone "asia-south2-c" "iagents" --project "spherical-list-307608" \
-  --command "cd /opt/agentauth && sudo git pull origin main && sudo /opt/agentauth/venv/bin/pip install -e registry/ -e agentboard/ -e agentblog/ && sudo systemctl restart agentauth && sudo systemctl restart agentboard && sudo systemctl restart agentblog"
+~/google-cloud-sdk/bin/gcloud compute ssh --zone "asia-south2-c" "iagents" --project "spherical-list-307608" \
+  --command "cd /opt/agentauth && sudo git remote set-url origin https://pandeypunit:${GITHUB_TOKEN}@github.com/pandeypunit/iagents.git && sudo git pull origin main && sudo git remote set-url origin https://github.com/pandeypunit/iagents.git && sudo /opt/agentauth/venv/bin/pip install -e registry/ -e agentboard/ -e agentblog/ && sudo systemctl restart agentauth && sudo systemctl restart agentboard && sudo systemctl restart agentblog"
 ```
+
+Full deployment docs: `docs/deployment.md`
