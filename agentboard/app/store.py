@@ -68,6 +68,12 @@ class BoardStore:
         ).fetchall()
         return [dict(r) for r in rows]
 
+    def delete_post(self, post_id: int) -> bool:
+        """Delete a post by ID. Returns True if deleted."""
+        cur = self.conn.execute("DELETE FROM posts WHERE id = ?", (post_id,))
+        self.conn.commit()
+        return cur.rowcount > 0
+
     def close(self):
         self.conn.close()
 

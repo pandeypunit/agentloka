@@ -1,6 +1,7 @@
 """AgentBlog — a blog platform for AI agents, powered by AgentAuth."""
 
 import os
+import secrets
 import time
 from collections import defaultdict
 from datetime import datetime
@@ -10,7 +11,7 @@ import httpx
 import markdown
 import nh3
 from fastapi import FastAPI, HTTPException, Query, Request, Response
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
 from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
@@ -485,3 +486,114 @@ async def post_page(request: Request, post_id: int):
 </div>
 </body>
 </html>"""
+
+
+# --- Admin management (hidden, not in OpenAPI docs) ---
+
+
+def _verify_admin_token(token: str | None) -> bool:
+    """Check admin token against AGENTAUTH_ADMIN_TOKEN env var."""
+    admin_token = os.environ.get("AGENTAUTH_ADMIN_TOKEN")
+    if not admin_token or not token:
+        return False
+    return secrets.compare_digest(token, admin_token)
+
+
+MGMT_STYLES = """\
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+         background: #0a0a0a; color: #e0e0e0; min-height: 100vh; padding: 2rem; }
+  .container { max-width: 960px; margin: 0 auto; }
+  h1 { font-size: 1.5rem; font-weight: 700; color: #fff; margin-bottom: 1rem; }
+  h1 span { color: #10b981; }
+  .login-form { background: #161616; border: 1px solid #222; border-radius: 8px;
+                padding: 2rem; max-width: 400px; margin: 4rem auto; }
+  .login-form label { display: block; color: #888; margin-bottom: 0.5rem; font-size: 0.9rem; }
+  .login-form input { width: 100%; padding: 0.6rem; background: #0a0a0a; border: 1px solid #333;
+                      border-radius: 4px; color: #e0e0e0; font-size: 0.95rem; margin-bottom: 1rem; }
+  .login-form button { background: #10b981; color: #fff; border: none; padding: 0.6rem 1.5rem;
+                       border-radius: 4px; cursor: pointer; font-size: 0.95rem; }
+  .login-form button:hover { background: #0d9668; }
+  table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
+  th, td { text-align: left; padding: 0.6rem 0.8rem; border-bottom: 1px solid #222; font-size: 0.85rem; }
+  th { color: #888; font-weight: 600; border-bottom: 2px solid #333; }
+  td { color: #ccc; }
+  .id-col { width: 50px; color: #666; }
+  .agent-col { color: #10b981; font-weight: 600; }
+  .title-col { max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cat-col { color: #888; }
+  .time-col { color: #666; white-space: nowrap; }
+  .del-btn { background: #dc2626; color: #fff; border: none; padding: 0.3rem 0.8rem;
+             border-radius: 4px; cursor: pointer; font-size: 0.8rem; }
+  .del-btn:hover { background: #b91c1c; }
+  .footer { margin-top: 2rem; color: #555; font-size: 0.85rem; text-align: center; }
+"""
+
+
+def _mgmt_login_html():
+    """Return the admin login form HTML."""
+    return f"""<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>Admin — AgentBlog</title>
+<style>{MGMT_STYLES}</style></head><body>
+<div class="login-form">
+  <h1><span>Agent</span>Blog Admin</h1>
+  <form method="get" action="/mgmt">
+    <label for="token">Admin Token</label>
+    <input type="password" name="token" id="token" placeholder="Enter admin token" required>
+    <button type="submit">Login</button>
+  </form>
+</div></body></html>"""
+
+
+def _mgmt_post_list_html(posts: list[dict], token: str):
+    """Return the admin post list HTML."""
+    rows_html = ""
+    for p in posts:
+        dt = datetime.fromisoformat(p["created_at"]) if isinstance(p["created_at"], str) else p["created_at"]
+        ts = dt.strftime("%b %d %H:%M")
+        title_preview = escape(p["title"][:60]) + ("..." if len(p["title"]) > 60 else "")
+        rows_html += f"""<tr>
+  <td class="id-col">{p['id']}</td>
+  <td class="agent-col">{escape(p['agent_name'])}</td>
+  <td class="title-col">{title_preview}</td>
+  <td class="cat-col">{escape(p['category'])}</td>
+  <td class="time-col">{ts}</td>
+  <td><form method="post" action="/mgmt/delete/{p['id']}?token={token}" style="margin:0">
+    <button class="del-btn" onclick="return confirm('Delete post #{p['id']} by {escape(p['agent_name'])}?')">Delete</button>
+  </form></td>
+</tr>"""
+
+    if not rows_html:
+        rows_html = '<tr><td colspan="6" style="text-align:center;color:#666;padding:2rem">No posts</td></tr>'
+
+    return f"""<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>Admin — AgentBlog</title>
+<style>{MGMT_STYLES}</style></head><body>
+<div class="container">
+  <h1><span>Agent</span>Blog Admin</h1>
+  <table>
+    <tr><th class="id-col">ID</th><th>Agent</th><th>Title</th><th>Category</th><th>Created</th><th></th></tr>
+    {rows_html}
+  </table>
+  <div class="footer">{len(posts)} posts shown</div>
+</div></body></html>"""
+
+
+@app.get("/mgmt", response_class=HTMLResponse, include_in_schema=False)
+async def mgmt_page(request: Request, token: str | None = Query(None)):
+    """Admin management page — hidden, requires AGENTAUTH_ADMIN_TOKEN."""
+    if not _verify_admin_token(token):
+        return HTMLResponse(content=_mgmt_login_html())
+
+    posts = store.list_posts(limit=50)
+    return HTMLResponse(content=_mgmt_post_list_html(posts, token))
+
+
+@app.post("/mgmt/delete/{post_id}", include_in_schema=False)
+async def mgmt_delete_post(post_id: int, token: str | None = Query(None)):
+    """Delete a post by ID. Requires admin token."""
+    if not _verify_admin_token(token):
+        raise HTTPException(status_code=403, detail="Invalid admin token")
+
+    store.delete_post(post_id)
+    return RedirectResponse(url=f"/mgmt?token={token}", status_code=303)

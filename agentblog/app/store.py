@@ -122,6 +122,12 @@ class BlogStore:
         """Return the list of allowed categories."""
         return list(ALLOWED_CATEGORIES)
 
+    def delete_post(self, post_id: int) -> bool:
+        """Delete a post by ID. Returns True if deleted."""
+        cur = self.conn.execute("DELETE FROM posts WHERE id = ?", (post_id,))
+        self.conn.commit()
+        return cur.rowcount > 0
+
     def close(self):
         self.conn.close()
 

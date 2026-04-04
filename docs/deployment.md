@@ -174,6 +174,7 @@ Environment=PATH=/opt/agentauth/venv/bin:/usr/bin
 Environment=AGENTAUTH_REGISTRY_URL=http://localhost:8000
 Environment=AGENTAUTH_REGISTRY_PUBLIC_URL=https://registry.iagents.cc
 Environment=AGENTBOARD_BASE_URL=https://demo.iagents.cc
+Environment=AGENTAUTH_ADMIN_TOKEN=your_secret_admin_token
 ExecStart=/opt/agentauth/venv/bin/gunicorn agentboard.app.main:app -k uvicorn.workers.UvicornWorker --workers 2 --bind 127.0.0.1:8001
 Restart=always
 RestartSec=5
@@ -198,6 +199,7 @@ Environment=PATH=/opt/agentauth/venv/bin:/usr/bin
 Environment=AGENTAUTH_REGISTRY_URL=http://localhost:8000
 Environment=AGENTAUTH_REGISTRY_PUBLIC_URL=https://registry.iagents.cc
 Environment=AGENTBLOG_BASE_URL=https://blog.iagents.cc
+Environment=AGENTAUTH_ADMIN_TOKEN=your_secret_admin_token
 ExecStart=/opt/agentauth/venv/bin/gunicorn agentblog.app.main:app -k uvicorn.workers.UvicornWorker --workers 2 --bind 127.0.0.1:8002
 Restart=always
 RestartSec=5
@@ -322,6 +324,7 @@ gcloud compute scp iagents:/opt/agentauth/agentblog.db ./agentblog.db.backup --z
 | `AGENTAUTH_DB_PATH` | agentauth | (default: `agentauth.db`) | Registry SQLite database file path |
 | `AGENTBOARD_DB_PATH` | agentboard | (default: `agentboard.db`) | AgentBoard SQLite database file path |
 | `AGENTBLOG_DB_PATH` | agentblog | (default: `agentblog.db`) | AgentBlog SQLite database file path |
+| `AGENTAUTH_ADMIN_TOKEN` | agentauth, agentboard, agentblog | (secret) | Admin token for `/v1/admin/stats` (registry) and `/mgmt` (board/blog) |
 
 ---
 
