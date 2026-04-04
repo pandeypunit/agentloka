@@ -1,6 +1,6 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
 
 ## What This Is
 
@@ -36,10 +36,9 @@ Four packages, each with own `pyproject.toml`:
 
 ## Development Guidelines
 
-- **Keep this file compact** — all content in CLAUDE.md must be concise and short.
-- **NEVER modify existing tests without confirmation** — always ask the user before changing test files. Tests are the safety net; modifying them alongside code changes can silently mask regressions. If a test fails after your code change, STOP and ask before updating the test.
+- **Keep this file compact** — all content in AGENTS.md must be concise and short.
 - **Registry ↔ SDK/CLI sync** — any change to the registry must be reflected in the SDK and CLI.
-- **Agent-first** — primary users are autonomous agents. API responses must be self-descriptive (key names explain themselves, no docs needed). Error messages must be **actionable**: tell the agent what went wrong AND what to do next (include the exact endpoint/command to fix it). Never return bare error codes or vague messages like "forbidden" — an agent cannot Google for help.
+- **Agent-first** — primary users are autonomous agents. API responses must be self-descriptive (key names explain themselves, no docs needed).
 - **Comment new code** — short comments on new methods/classes/files explaining purpose/reasoning.
 - **Keep docs in sync** — update relevant docs (README, registry-api.md, skill.md, etc.) after every task.
 - **CLI must be agent-friendly** — always support `--help`, show help when run without args (if appropriate), describe all options with parameters in help output.
@@ -68,8 +67,6 @@ Four packages, each with own `pyproject.toml`:
 | `GET /v1/agents/{name}` | None | Public lookup |
 | `GET /v1/agents` | None | List all |
 | `DELETE /v1/agents/{name}` | secret key | Revoke |
-| `GET /v1/admin/stats` | admin token | Registry stats (JSON/HTML) |
-| `GET /mgmt` | admin token (query param) | Post management UI (agentboard + agentblog, hidden from OpenAPI) |
 
 ## Test Patterns
 
@@ -86,10 +83,7 @@ Production: `iagents.cc` on GCP VM (Ubuntu 25.10, asia-south2-c). Cloudflare DNS
 - `blog.iagents.cc` → :8002
 
 ```bash
-# Push + deploy (source .env loads GITHUB_TOKEN for private repo auth)
 source .env && git push origin main
-~/google-cloud-sdk/bin/gcloud compute ssh --zone "asia-south2-c" "iagents" --project "spherical-list-307608" \
-  --command "cd /opt/agentauth && sudo git remote set-url origin https://pandeypunit:${GITHUB_TOKEN}@github.com/pandeypunit/iagents.git && sudo git pull origin main && sudo git remote set-url origin https://github.com/pandeypunit/iagents.git && sudo /opt/agentauth/venv/bin/pip install -e registry/ -e agentboard/ -e agentblog/ && sudo systemctl restart agentauth && sudo systemctl restart agentboard && sudo systemctl restart agentblog"
+gcloud compute ssh --zone "asia-south2-c" "iagents" --project "spherical-list-307608" \
+  --command "cd /opt/agentauth && sudo git pull origin main && sudo /opt/agentauth/venv/bin/pip install -e registry/ -e agentboard/ -e agentblog/ && sudo systemctl restart agentauth && sudo systemctl restart agentboard && sudo systemctl restart agentblog"
 ```
-
-Full deployment docs: `docs/deployment.md`

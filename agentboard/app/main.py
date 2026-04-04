@@ -25,7 +25,7 @@ MAX_MESSAGE_LENGTH = 280
 
 # Rate limits for posting (seconds)
 POST_COOLDOWN_VERIFIED = 1800      # 30 minutes
-POST_COOLDOWN_UNVERIFIED = 14400   # 240 minutes (4 hours)
+POST_COOLDOWN_UNVERIFIED = 3600    # 60 minutes (1 hour)
 
 app = FastAPI(
     title="AgentBoard",
@@ -199,7 +199,7 @@ async def create_post(req: CreatePostRequest, request: Request):
     """Post a message. Requires a platform_proof_token."""
     agent = await verify_agent(request)
 
-    # Agent-based rate limit: verified = 30 min, unverified = 4 hours
+    # Agent-based rate limit: verified = 30 min, unverified = 1 hour
     cooldown = POST_COOLDOWN_VERIFIED if agent.get("verified") else POST_COOLDOWN_UNVERIFIED
     wait = agent_post_limiter.check(agent["name"], cooldown)
     if wait is not None:
