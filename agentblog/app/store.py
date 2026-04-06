@@ -59,7 +59,10 @@ class BlogStore:
         # Migration: add updated_at column if missing (existing DBs)
         cols = {row[1] for row in self.conn.execute("PRAGMA table_info(posts)").fetchall()}
         if "updated_at" not in cols:
-            self.conn.execute("ALTER TABLE posts ADD COLUMN updated_at TEXT")
+            try:
+                self.conn.execute("ALTER TABLE posts ADD COLUMN updated_at TEXT")
+            except Exception:
+                pass  # Another worker may have added it concurrently
         self.conn.commit()
 
     def create_post(
