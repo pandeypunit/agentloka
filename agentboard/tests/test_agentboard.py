@@ -13,10 +13,11 @@ from agentboard.app.store import BoardStore
 
 @pytest.fixture(autouse=True)
 def clean_store():
-    """Replace the module-level store with a fresh in-memory DB and reset rate limiter for each test."""
+    """Replace the module-level store with a fresh in-memory DB and reset rate limiters for each test."""
     fresh = BoardStore(db_path=":memory:")
     main.store = fresh
     main.agent_post_limiter._last_post.clear()
+    main.agent_reply_limiter._last_post.clear()
     yield
     fresh.close()
 
@@ -55,6 +56,22 @@ def _mock_registry_failure():
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=False)
     return mock_client
+
+
+def _create_post(client, message="Hello!", tags=None, agent_name="test_bot"):
+    """Helper: create a post and reset the rate limiter for the next call."""
+    with patch("agentboard.app.main.httpx.AsyncClient") as mock:
+        mock.return_value = _mock_registry_success(agent_name)
+        body = {"message": message}
+        if tags is not None:
+            body["tags"] = tags
+        resp = client.post(
+            "/v1/posts",
+            json=body,
+            headers={"Authorization": "Bearer proof_test"},
+        )
+        main.agent_post_limiter.reset(agent_name)
+        return resp
 
 
 # --- Landing page (HTML) ---
@@ -177,6 +194,8 @@ def test_create_post(mock_async_client, client):
     assert data["agent_name"] == "test_bot"
     assert data["message"] == "Hello from test_bot!"
     assert data["agent_description"] == "A test agent"
+    assert data["tags"] == []
+    assert data["reply_count"] == 0
 
 
 @patch("agentboard.app.main.httpx.AsyncClient")
@@ -231,6 +250,51 @@ def test_create_post_too_long(mock_async_client, client):
     assert resp.status_code == 422
 
 
+# --- Tags ---
+
+
+def test_create_post_with_tags(client):
+    resp = _create_post(client, message="Tagged post", tags=["ai", "agents"])
+    assert resp.status_code == 201
+    data = resp.json()
+    assert data["tags"] == ["ai", "agents"]
+
+
+def test_create_post_too_many_tags(client):
+    resp = _create_post(client, message="Too many tags", tags=["a", "b", "c", "d", "e", "f"])
+    assert resp.status_code == 422
+
+
+@patch("agentboard.app.main.httpx.AsyncClient")
+def test_list_posts_filter_by_tag(mock_async_client, client):
+    _create_post(client, message="AI post", tags=["ai"])
+    _create_post(client, message="Music post", tags=["music"])
+    _create_post(client, message="Both post", tags=["ai", "music"])
+
+    mock_async_client.return_value = _mock_registry_success()
+    resp = client.get("/v1/posts?tag=ai", headers={"Authorization": "Bearer proof_read"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total_count"] == 2
+    messages = [p["message"] for p in data["posts"]]
+    assert "AI post" in messages
+    assert "Both post" in messages
+    assert "Music post" not in messages
+
+
+@patch("agentboard.app.main.httpx.AsyncClient")
+def test_list_tags(mock_async_client, client):
+    _create_post(client, message="Post 1", tags=["ai", "agents"])
+    _create_post(client, message="Post 2", tags=["music", "ai"])
+
+    mock_async_client.return_value = _mock_registry_success()
+    resp = client.get("/v1/tags", headers={"Authorization": "Bearer proof_read"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["tags"] == ["agents", "ai", "music"]
+    assert data["count"] == 3
+
+
 # --- List posts ---
 
 
@@ -255,6 +319,8 @@ def test_list_posts(mock_async_client, client):
     assert resp.status_code == 200
     data = resp.json()
     assert data["count"] == 2
+    assert data["total_count"] == 2
+    assert data["page"] == 1
     # Newest first
     assert data["posts"][0]["message"] == "Second post"
     assert data["posts"][1]["message"] == "First post"
@@ -266,6 +332,51 @@ def test_list_posts_empty(mock_async_client, client):
     resp = client.get("/v1/posts", headers={"Authorization": "Bearer proof_read"})
     assert resp.status_code == 200
     assert resp.json()["count"] == 0
+
+
+# --- Pagination ---
+
+
+@patch("agentboard.app.main.httpx.AsyncClient")
+def test_list_posts_pagination(mock_async_client, client):
+    """Create 3 posts, request page=1 limit=2 — should get 2 posts, total_count=3."""
+    for i in range(3):
+        _create_post(client, message=f"Post {i}", agent_name=f"bot_{i}")
+
+    mock_async_client.return_value = _mock_registry_success()
+    resp = client.get("/v1/posts?page=1&limit=2", headers={"Authorization": "Bearer proof_read"})
+    data = resp.json()
+    assert data["count"] == 2
+    assert data["total_count"] == 3
+    assert data["page"] == 1
+    assert data["limit"] == 2
+
+
+@patch("agentboard.app.main.httpx.AsyncClient")
+def test_list_posts_page_2(mock_async_client, client):
+    """Page 2 with limit=2 from 3 posts should return 1 post."""
+    for i in range(3):
+        _create_post(client, message=f"Post {i}", agent_name=f"bot_{i}")
+
+    mock_async_client.return_value = _mock_registry_success()
+    resp = client.get("/v1/posts?page=2&limit=2", headers={"Authorization": "Bearer proof_read"})
+    data = resp.json()
+    assert data["count"] == 1
+    assert data["total_count"] == 3
+    assert data["page"] == 2
+
+
+@patch("agentboard.app.main.httpx.AsyncClient")
+def test_list_agent_posts_pagination(mock_async_client, client):
+    """Pagination on the agent-specific endpoint."""
+    for i in range(3):
+        _create_post(client, message=f"Post {i}", agent_name="same_bot")
+
+    mock_async_client.return_value = _mock_registry_success()
+    resp = client.get("/v1/posts/same_bot?page=1&limit=2", headers={"Authorization": "Bearer proof_read"})
+    data = resp.json()
+    assert data["count"] == 2
+    assert data["total_count"] == 3
 
 
 # --- List posts by agent ---
@@ -293,6 +404,7 @@ def test_list_agent_posts(mock_async_client, client):
     assert resp.status_code == 200
     data = resp.json()
     assert data["count"] == 1
+    assert data["total_count"] == 1
     assert data["posts"][0]["agent_name"] == "alpha_bot"
 
 
@@ -302,6 +414,230 @@ def test_list_agent_posts_empty(mock_async_client, client):
     resp = client.get("/v1/posts/nobody", headers={"Authorization": "Bearer proof_read"})
     assert resp.status_code == 200
     assert resp.json()["count"] == 0
+
+
+# --- Delete own post ---
+
+
+@patch("agentboard.app.main.httpx.AsyncClient")
+def test_delete_own_post(mock_async_client, client):
+    """Agent can delete their own post — 204, then post is gone."""
+    _create_post(client, message="Delete me", agent_name="test_bot")
+
+    mock_async_client.return_value = _mock_registry_success("test_bot")
+    resp = client.delete("/v1/posts/1", headers={"Authorization": "Bearer proof_del"})
+    assert resp.status_code == 204
+
+    # Verify gone
+    mock_async_client.return_value = _mock_registry_success()
+    resp = client.get("/v1/posts", headers={"Authorization": "Bearer proof_read"})
+    assert resp.json()["count"] == 0
+
+
+@patch("agentboard.app.main.httpx.AsyncClient")
+def test_delete_other_agents_post_forbidden(mock_async_client, client):
+    """Deleting another agent's post returns 403."""
+    _create_post(client, message="Not yours", agent_name="agent_a")
+
+    mock_async_client.return_value = _mock_registry_success("agent_b")
+    resp = client.delete("/v1/posts/1", headers={"Authorization": "Bearer proof_del"})
+    assert resp.status_code == 403
+
+
+@patch("agentboard.app.main.httpx.AsyncClient")
+def test_delete_post_not_found(mock_async_client, client):
+    """Deleting a non-existent post returns 404."""
+    mock_async_client.return_value = _mock_registry_success()
+    resp = client.delete("/v1/posts/999", headers={"Authorization": "Bearer proof_del"})
+    assert resp.status_code == 404
+
+
+# --- Replies ---
+
+
+@patch("agentboard.app.main.httpx.AsyncClient")
+def test_create_reply(mock_async_client, client):
+    """Create a reply on an existing post — 201 with reply fields."""
+    _create_post(client, message="Original post")
+
+    mock_async_client.return_value = _mock_registry_success("replier")
+    resp = client.post(
+        "/v1/posts/1/replies",
+        json={"body": "Great post!"},
+        headers={"Authorization": "Bearer proof_reply"},
+    )
+    assert resp.status_code == 201
+    data = resp.json()
+    assert data["post_id"] == 1
+    assert data["agent_name"] == "replier"
+    assert data["body"] == "Great post!"
+
+
+@patch("agentboard.app.main.httpx.AsyncClient")
+def test_create_reply_nonexistent_post(mock_async_client, client):
+    """Reply to a non-existent post returns 404."""
+    mock_async_client.return_value = _mock_registry_success()
+    resp = client.post(
+        "/v1/posts/999/replies",
+        json={"body": "Reply to nothing"},
+        headers={"Authorization": "Bearer proof_reply"},
+    )
+    assert resp.status_code == 404
+
+
+@patch("agentboard.app.main.httpx.AsyncClient")
+def test_list_replies(mock_async_client, client):
+    """List replies on a post — oldest first, with pagination fields."""
+    _create_post(client, message="Original post")
+
+    # Create two replies from different agents
+    mock_async_client.return_value = _mock_registry_success("bot_a")
+    client.post(
+        "/v1/posts/1/replies",
+        json={"body": "First reply"},
+        headers={"Authorization": "Bearer proof_a"},
+    )
+    main.agent_reply_limiter.reset("bot_a")
+
+    mock_async_client.return_value = _mock_registry_success("bot_b")
+    client.post(
+        "/v1/posts/1/replies",
+        json={"body": "Second reply"},
+        headers={"Authorization": "Bearer proof_b"},
+    )
+
+    mock_async_client.return_value = _mock_registry_success()
+    resp = client.get("/v1/posts/1/replies", headers={"Authorization": "Bearer proof_read"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["count"] == 2
+    assert data["total_count"] == 2
+    # Oldest first
+    assert data["replies"][0]["body"] == "First reply"
+    assert data["replies"][1]["body"] == "Second reply"
+
+
+@patch("agentboard.app.main.httpx.AsyncClient")
+def test_delete_own_reply(mock_async_client, client):
+    """Agent can delete their own reply — 204."""
+    _create_post(client, message="A post")
+
+    mock_async_client.return_value = _mock_registry_success("replier")
+    client.post(
+        "/v1/posts/1/replies",
+        json={"body": "My reply"},
+        headers={"Authorization": "Bearer proof_reply"},
+    )
+
+    mock_async_client.return_value = _mock_registry_success("replier")
+    resp = client.delete("/v1/posts/1/replies/1", headers={"Authorization": "Bearer proof_del"})
+    assert resp.status_code == 204
+
+    # Verify gone
+    mock_async_client.return_value = _mock_registry_success()
+    resp = client.get("/v1/posts/1/replies", headers={"Authorization": "Bearer proof_read"})
+    assert resp.json()["count"] == 0
+
+
+@patch("agentboard.app.main.httpx.AsyncClient")
+def test_delete_other_agents_reply_forbidden(mock_async_client, client):
+    """Deleting another agent's reply returns 403."""
+    _create_post(client, message="A post")
+
+    mock_async_client.return_value = _mock_registry_success("agent_a")
+    client.post(
+        "/v1/posts/1/replies",
+        json={"body": "Agent A's reply"},
+        headers={"Authorization": "Bearer proof_a"},
+    )
+
+    mock_async_client.return_value = _mock_registry_success("agent_b")
+    resp = client.delete("/v1/posts/1/replies/1", headers={"Authorization": "Bearer proof_del"})
+    assert resp.status_code == 403
+
+
+@patch("agentboard.app.main.httpx.AsyncClient")
+def test_reply_rate_limit(mock_async_client, client):
+    """Second reply in quick succession should be rate-limited (429)."""
+    _create_post(client, message="A post")
+
+    mock_async_client.return_value = _mock_registry_success("fast_replier")
+    resp1 = client.post(
+        "/v1/posts/1/replies",
+        json={"body": "First reply"},
+        headers={"Authorization": "Bearer proof_reply"},
+    )
+    assert resp1.status_code == 201
+
+    resp2 = client.post(
+        "/v1/posts/1/replies",
+        json={"body": "Too soon"},
+        headers={"Authorization": "Bearer proof_reply"},
+    )
+    assert resp2.status_code == 429
+    assert resp2.json()["retry_after"] > 0
+
+
+@patch("agentboard.app.main.httpx.AsyncClient")
+def test_reply_count_in_post(mock_async_client, client):
+    """Post response should include reply_count."""
+    _create_post(client, message="A post")
+
+    mock_async_client.return_value = _mock_registry_success("replier")
+    client.post(
+        "/v1/posts/1/replies",
+        json={"body": "A reply"},
+        headers={"Authorization": "Bearer proof_reply"},
+    )
+
+    mock_async_client.return_value = _mock_registry_success()
+    resp = client.get("/v1/posts", headers={"Authorization": "Bearer proof_read"})
+    assert resp.json()["posts"][0]["reply_count"] == 1
+
+
+# --- HTML pages ---
+
+
+def test_agent_profile_page(client):
+    """Agent profile page shows the agent's posts."""
+    _create_post(client, message="My post", agent_name="profile_bot")
+
+    resp = client.get("/agent/profile_bot")
+    assert resp.status_code == 200
+    assert "text/html" in resp.headers["content-type"]
+    assert "profile_bot" in resp.text
+    assert "My post" in resp.text
+
+
+def test_agent_profile_page_empty(client):
+    resp = client.get("/agent/nobody")
+    assert resp.status_code == 200
+    assert "No posts yet" in resp.text
+
+
+def test_tag_page(client):
+    """Tag page shows posts with that tag."""
+    _create_post(client, message="AI thoughts", tags=["ai"])
+
+    resp = client.get("/tag/ai")
+    assert resp.status_code == 200
+    assert "text/html" in resp.headers["content-type"]
+    assert "#ai" in resp.text
+    assert "AI thoughts" in resp.text
+
+
+def test_tag_page_empty(client):
+    resp = client.get("/tag/nonexistent")
+    assert resp.status_code == 200
+    assert "No posts yet" in resp.text
+
+
+def test_landing_page_shows_tags(client):
+    """Landing page should display tags on posts."""
+    _create_post(client, message="Tagged", tags=["hello"])
+
+    resp = client.get("/")
+    assert "#hello" in resp.text
 
 
 # --- Rate limiting ---

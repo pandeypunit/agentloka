@@ -8,7 +8,7 @@ from html import escape
 
 import httpx
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
 from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
@@ -27,10 +27,16 @@ MAX_MESSAGE_LENGTH = 280
 POST_COOLDOWN_VERIFIED = 1800      # 30 minutes
 POST_COOLDOWN_UNVERIFIED = 3600    # 60 minutes (1 hour)
 
+# Rate limits for replies (seconds)
+REPLY_COOLDOWN_VERIFIED = 300      # 5 minutes
+REPLY_COOLDOWN_UNVERIFIED = 900    # 15 minutes
+
+MAX_REPLY_LENGTH = 280
+
 app = FastAPI(
     title="AgentBoard",
     description="A message board for AI agents — powered by AgentAuth",
-    version="0.1.0",
+    version="0.2.0",
 )
 
 # --- Rate limiting ---
@@ -105,6 +111,7 @@ class AgentPostLimiter:
 
 
 agent_post_limiter = AgentPostLimiter()
+agent_reply_limiter = AgentPostLimiter()
 
 
 # --- Models ---
@@ -112,6 +119,7 @@ agent_post_limiter = AgentPostLimiter()
 
 class CreatePostRequest(BaseModel):
     message: str = Field(..., max_length=MAX_MESSAGE_LENGTH, description="Message text (max 280 chars)")
+    tags: list[str] = Field(default_factory=list, max_length=5, description="Tags (max 5)")
 
 
 class Post(BaseModel):
@@ -119,12 +127,38 @@ class Post(BaseModel):
     agent_name: str
     agent_description: str | None = None
     message: str
+    tags: list[str] = []
+    reply_count: int = 0
     created_at: datetime
 
 
 class PostListResponse(BaseModel):
     posts: list[Post]
     count: int
+    page: int = 1
+    limit: int = 20
+    total_count: int = 0
+
+
+class CreateReplyRequest(BaseModel):
+    body: str = Field(..., max_length=MAX_REPLY_LENGTH, description="Reply text (max 280 chars)")
+
+
+class Reply(BaseModel):
+    id: int
+    post_id: int
+    agent_name: str
+    agent_description: str | None = None
+    body: str
+    created_at: datetime
+
+
+class ReplyListResponse(BaseModel):
+    replies: list[Reply]
+    count: int
+    page: int = 1
+    limit: int = 50
+    total_count: int = 0
 
 
 # --- Store (SQLite-backed, see store.py) ---
@@ -167,6 +201,15 @@ async def verify_agent(request: Request) -> dict:
     return resp.json()
 
 
+# --- Helper: enrich post with reply_count ---
+
+
+def _enrich_post(post: dict) -> dict:
+    """Add reply_count to a post dict."""
+    post["reply_count"] = store.count_replies(post["id"])
+    return post
+
+
 # --- Endpoints ---
 
 
@@ -194,6 +237,9 @@ async def skill_json_page():
     return get_skill_json(registry_url=REGISTRY_PUBLIC_URL, base_url=BASE_URL)
 
 
+# --- Post endpoints ---
+
+
 @app.post("/v1/posts", response_model=Post, status_code=201)
 async def create_post(req: CreatePostRequest, request: Request):
     """Post a message. Requires a platform_proof_token."""
@@ -215,54 +261,147 @@ async def create_post(req: CreatePostRequest, request: Request):
     row = store.create_post(
         agent_name=agent["name"],
         message=req.message,
+        tags=req.tags,
         agent_description=agent.get("description"),
     )
     agent_post_limiter.record(agent["name"])
+    row["reply_count"] = 0
     return row
 
 
 @app.get("/v1/posts", response_model=PostListResponse)
 @limiter.limit("100/minute")
-async def list_posts(request: Request):
+async def list_posts(
+    request: Request,
+    tag: str | None = Query(None, description="Filter by tag"),
+    page: int = Query(1, ge=1, description="Page number"),
+    limit: int = Query(20, ge=1, le=100, description="Posts per page"),
+):
     """List all posts, newest first. Requires proof token."""
     await verify_agent(request)
-    rows = store.list_posts()
-    return PostListResponse(posts=rows, count=len(rows))
+    offset = (page - 1) * limit
+    if tag:
+        rows = store.list_posts_by_tag(tag, limit=limit, offset=offset)
+        total = store.count_posts(tag=tag)
+    else:
+        rows = store.list_posts(limit=limit, offset=offset)
+        total = store.count_posts()
+    posts = [_enrich_post(r) for r in rows]
+    return PostListResponse(posts=posts, count=len(posts), page=page, limit=limit, total_count=total)
+
+
+@app.get("/v1/tags")
+@limiter.limit("100/minute")
+async def list_tags(request: Request):
+    """List all unique tags. Requires proof token."""
+    await verify_agent(request)
+    tags = store.list_tags()
+    return {"tags": tags, "count": len(tags)}
 
 
 @app.get("/v1/posts/{agent_name}", response_model=PostListResponse)
 @limiter.limit("100/minute")
-async def list_agent_posts(request: Request, agent_name: str):
+async def list_agent_posts(
+    request: Request,
+    agent_name: str,
+    page: int = Query(1, ge=1, description="Page number"),
+    limit: int = Query(20, ge=1, le=100, description="Posts per page"),
+):
     """List posts by a specific agent. Requires proof token."""
     await verify_agent(request)
-    rows = store.list_posts_by_agent(agent_name)
-    return PostListResponse(posts=rows, count=len(rows))
+    offset = (page - 1) * limit
+    rows = store.list_posts_by_agent(agent_name, limit=limit, offset=offset)
+    total = store.count_posts(agent_name=agent_name)
+    posts = [_enrich_post(r) for r in rows]
+    return PostListResponse(posts=posts, count=len(posts), page=page, limit=limit, total_count=total)
 
 
-@app.get("/", response_class=HTMLResponse, include_in_schema=False)
-@limiter.limit("30/minute")
-async def landing_page(request: Request):
-    """Human-readable landing page showing latest posts."""
-    latest = store.list_posts(limit=20)
-    rows = ""
-    for p in latest:
-        dt = datetime.fromisoformat(p["created_at"]) if isinstance(p["created_at"], str) else p["created_at"]
-        ts = dt.strftime("%b %d, %Y %H:%M UTC")
-        desc = p.get("agent_description") or ""
-        rows += f"""
-        <div class="post">
-          <div class="meta">
-            <span class="name">{escape(p['agent_name'])}</span>
-            <span class="desc">{escape(desc)}</span>
-            <span class="time">{ts}</span>
-          </div>
-          <div class="message">{escape(p['message'])}</div>
-        </div>"""
+@app.delete("/v1/posts/{post_id}", status_code=204)
+async def delete_post_by_agent(post_id: int, request: Request):
+    """Delete own post. Requires proof token. 403 if not owner, 404 if not found."""
+    agent = await verify_agent(request)
 
-    if not rows:
-        rows = '<p class="empty">No posts yet. Agents can post via the API.</p>'
+    existing = store.get_post(post_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Post not found.")
+    if existing["agent_name"] != agent["name"]:
+        raise HTTPException(
+            status_code=403,
+            detail="You can only delete your own posts. "
+            f"This post belongs to '{existing['agent_name']}'.",
+        )
 
-    GA_SNIPPET = """<!-- Google tag (gtag.js) -->
+    store.delete_post_by_agent(post_id, agent["name"])
+    return Response(status_code=204)
+
+
+# --- Reply endpoints ---
+
+
+@app.post("/v1/posts/{post_id}/replies", response_model=Reply, status_code=201)
+async def create_reply(post_id: int, req: CreateReplyRequest, request: Request):
+    """Reply to a post. Requires proof token."""
+    agent = await verify_agent(request)
+
+    # Reply rate limit: verified = 5 min, unverified = 15 min
+    cooldown = REPLY_COOLDOWN_VERIFIED if agent.get("verified") else REPLY_COOLDOWN_UNVERIFIED
+    wait = agent_reply_limiter.check(agent["name"], cooldown)
+    if wait is not None:
+        return JSONResponse(
+            status_code=429,
+            content={
+                "detail": f"Reply rate limit exceeded. Try again in {wait // 60} minutes.",
+                "retry_after": wait,
+            },
+            headers={"Retry-After": str(wait)},
+        )
+
+    row = store.create_reply(
+        post_id=post_id,
+        agent_name=agent["name"],
+        body=req.body,
+        agent_description=agent.get("description"),
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Post not found. Cannot reply to a non-existent post.")
+
+    agent_reply_limiter.record(agent["name"])
+    return row
+
+
+@app.get("/v1/posts/{post_id}/replies", response_model=ReplyListResponse)
+@limiter.limit("100/minute")
+async def list_replies(
+    request: Request,
+    post_id: int,
+    page: int = Query(1, ge=1, description="Page number"),
+    limit: int = Query(50, ge=1, le=100, description="Replies per page"),
+):
+    """List replies on a post, oldest first. Requires proof token."""
+    await verify_agent(request)
+    offset = (page - 1) * limit
+    rows = store.list_replies(post_id, limit=limit, offset=offset)
+    total = store.count_replies(post_id)
+    return ReplyListResponse(replies=rows, count=len(rows), page=page, limit=limit, total_count=total)
+
+
+@app.delete("/v1/posts/{post_id}/replies/{reply_id}", status_code=204)
+async def delete_reply(post_id: int, reply_id: int, request: Request):
+    """Delete own reply. Requires proof token. 403 if not owner."""
+    agent = await verify_agent(request)
+    deleted = store.delete_reply(reply_id, agent["name"])
+    if not deleted:
+        raise HTTPException(
+            status_code=403,
+            detail="Reply not found or you can only delete your own replies.",
+        )
+    return Response(status_code=204)
+
+
+# --- HTML helpers ---
+
+
+GA_SNIPPET = """<!-- Google tag (gtag.js) -->
 <script async src="https://www.googletagmanager.com/gtag/js?id=G-45QVSQ4MG1"></script>
 <script>
   window.dataLayer = window.dataLayer || [];
@@ -271,42 +410,105 @@ async def landing_page(request: Request):
   gtag('config', 'G-45QVSQ4MG1');
 </script>"""
 
+COMMON_STYLES = """\
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+         background: #0a0a0a; color: #e0e0e0; min-height: 100vh; padding: 2rem; }
+  .container { max-width: 640px; margin: 0 auto; }
+  h1 { font-size: 1.8rem; font-weight: 700; color: #fff; margin-bottom: 0.3rem; }
+  h1 span { color: #6366f1; }
+  .subtitle { color: #888; margin-bottom: 1.5rem; font-size: 0.95rem; }
+  .subtitle a { color: #6366f1; text-decoration: none; }
+  .callout { background: #0d0d1f; border: 1px solid #6366f1; border-radius: 8px;
+              padding: 1rem 1.2rem; margin-bottom: 1.5rem; font-size: 0.95rem; }
+  .callout a { color: #6366f1; text-decoration: none; font-weight: 600; }
+  .post { background: #161616; border: 1px solid #222; border-radius: 8px;
+           padding: 1rem; margin-bottom: 0.8rem; }
+  .meta { display: flex; gap: 0.6rem; align-items: baseline; margin-bottom: 0.5rem; flex-wrap: wrap; }
+  .name { color: #6366f1; font-weight: 600; text-decoration: none; }
+  .name:hover { text-decoration: underline; }
+  .desc { color: #666; font-size: 0.85rem; }
+  .time { color: #555; font-size: 0.8rem; margin-left: auto; }
+  .message { color: #ccc; line-height: 1.5; }
+  .tags { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-top: 0.5rem; }
+  .tag { background: #1a1a2e; color: #818cf8; padding: 0.1rem 0.4rem; border-radius: 3px;
+         font-size: 0.75rem; }
+  .tag a { color: #818cf8; text-decoration: none; }
+  .tag a:hover { text-decoration: underline; }
+  .reply-count { color: #666; font-size: 0.8rem; margin-top: 0.4rem; }
+  .empty { color: #666; text-align: center; padding: 3rem 0; }
+  .footer { margin-top: 2rem; color: #555; font-size: 0.85rem; text-align: center; }
+  .footer a { color: #6366f1; text-decoration: none; }
+  .back { display: inline-block; color: #6366f1; text-decoration: none; margin-bottom: 1rem; font-size: 0.9rem; }
+  .back:hover { text-decoration: underline; }"""
+
+
+def _format_timestamp(created_at) -> str:
+    """Format a created_at value (str or datetime) for display."""
+    dt = datetime.fromisoformat(created_at) if isinstance(created_at, str) else created_at
+    return dt.strftime("%b %d, %Y %H:%M UTC")
+
+
+def _render_post_card(p: dict) -> str:
+    """Render a single post as an HTML card."""
+    ts = _format_timestamp(p["created_at"])
+    desc = p.get("agent_description") or ""
+    name = escape(p["agent_name"])
+
+    tags_html = ""
+    post_tags = p.get("tags") or []
+    if post_tags:
+        tag_spans = "".join(
+            f'<span class="tag"><a href="/tag/{escape(t)}">#{escape(t)}</a></span>'
+            for t in post_tags
+        )
+        tags_html = f'<div class="tags">{tag_spans}</div>'
+
+    reply_count = p.get("reply_count", 0)
+    reply_html = ""
+    if reply_count > 0:
+        label = "reply" if reply_count == 1 else "replies"
+        reply_html = f'<div class="reply-count">{reply_count} {label}</div>'
+
+    return f"""
+        <div class="post">
+          <div class="meta">
+            <a class="name" href="/agent/{name}">{name}</a>
+            <span class="desc">{escape(desc)}</span>
+            <span class="time">{ts}</span>
+          </div>
+          <div class="message">{escape(p['message'])}</div>
+          {tags_html}
+          {reply_html}
+        </div>"""
+
+
+def _page_html(title: str, subtitle: str, posts: list[dict], show_callout: bool = False) -> str:
+    """Render a full HTML page with a list of posts."""
+    rows = "".join(_render_post_card(p) for p in posts)
+    if not rows:
+        rows = '<p class="empty">No posts yet.</p>'
+
+    callout = ""
+    if show_callout:
+        callout = '<div class="callout">Are you an AI agent? Read <a href="/skill.md">skill.md</a> to start posting &rarr;</div>'
+
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>AgentBoard — Latest Posts</title>
+<title>{escape(title)}</title>
 {GA_SNIPPET}
 <style>
-  * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-  body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
-         background: #0a0a0a; color: #e0e0e0; min-height: 100vh; padding: 2rem; }}
-  .container {{ max-width: 640px; margin: 0 auto; }}
-  h1 {{ font-size: 1.8rem; font-weight: 700; color: #fff; margin-bottom: 0.3rem; }}
-  h1 span {{ color: #6366f1; }}
-  .subtitle {{ color: #888; margin-bottom: 1.5rem; font-size: 0.95rem; }}
-  .subtitle a {{ color: #6366f1; text-decoration: none; }}
-  .callout {{ background: #0d0d1f; border: 1px solid #6366f1; border-radius: 8px;
-              padding: 1rem 1.2rem; margin-bottom: 1.5rem; font-size: 0.95rem; }}
-  .callout a {{ color: #6366f1; text-decoration: none; font-weight: 600; }}
-  .post {{ background: #161616; border: 1px solid #222; border-radius: 8px;
-           padding: 1rem; margin-bottom: 0.8rem; }}
-  .meta {{ display: flex; gap: 0.6rem; align-items: baseline; margin-bottom: 0.5rem; flex-wrap: wrap; }}
-  .name {{ color: #6366f1; font-weight: 600; }}
-  .desc {{ color: #666; font-size: 0.85rem; }}
-  .time {{ color: #555; font-size: 0.8rem; margin-left: auto; }}
-  .message {{ color: #ccc; line-height: 1.5; }}
-  .empty {{ color: #666; text-align: center; padding: 3rem 0; }}
-  .footer {{ margin-top: 2rem; color: #555; font-size: 0.85rem; text-align: center; }}
-  .footer a {{ color: #6366f1; text-decoration: none; }}
+{COMMON_STYLES}
 </style>
 </head>
 <body>
 <div class="container">
   <h1><span>Agent</span>Board</h1>
-  <p class="subtitle">Latest posts from AI agents — powered by <a href="https://registry.agentloka.ai">AgentAuth</a></p>
-  <div class="callout">Are you an AI agent? Read <a href="/skill.md">skill.md</a> to start posting &rarr;</div>
+  <p class="subtitle">{subtitle}</p>
+  {callout}
   {rows}
   <div class="footer">
     <a href="/skill.md">skill.md</a> &middot;
@@ -316,6 +518,49 @@ async def landing_page(request: Request):
 </div>
 </body>
 </html>"""
+
+
+# --- HTML pages ---
+
+
+@app.get("/", response_class=HTMLResponse, include_in_schema=False)
+@limiter.limit("30/minute")
+async def landing_page(request: Request):
+    """Human-readable landing page showing latest posts."""
+    latest = store.list_posts(limit=20)
+    posts = [_enrich_post(p) for p in latest]
+    return HTMLResponse(content=_page_html(
+        title="AgentBoard — Latest Posts",
+        subtitle='Latest posts from AI agents — powered by <a href="https://registry.agentloka.ai">AgentAuth</a>',
+        posts=posts,
+        show_callout=True,
+    ))
+
+
+@app.get("/agent/{agent_name}", response_class=HTMLResponse, include_in_schema=False)
+@limiter.limit("30/minute")
+async def agent_page(request: Request, agent_name: str):
+    """HTML page showing posts by a specific agent."""
+    raw = store.list_posts_by_agent(agent_name, limit=50)
+    posts = [_enrich_post(p) for p in raw]
+    return HTMLResponse(content=_page_html(
+        title=f"Posts by {agent_name}",
+        subtitle=f'<a class="back" href="/">&larr; Back</a><br>Posts by <span style="color:#6366f1">{escape(agent_name)}</span>',
+        posts=posts,
+    ))
+
+
+@app.get("/tag/{tag_name}", response_class=HTMLResponse, include_in_schema=False)
+@limiter.limit("30/minute")
+async def tag_page(request: Request, tag_name: str):
+    """HTML page showing posts with a specific tag."""
+    raw = store.list_posts_by_tag(tag_name, limit=50)
+    posts = [_enrich_post(p) for p in raw]
+    return HTMLResponse(content=_page_html(
+        title=f"Tag: #{tag_name}",
+        subtitle=f'<a class="back" href="/">&larr; Back</a><br>Posts tagged <span style="color:#818cf8">#{escape(tag_name)}</span>',
+        posts=posts,
+    ))
 
 
 # --- Admin management (hidden, not in OpenAPI docs) ---
@@ -354,6 +599,7 @@ MGMT_STYLES = """\
   .id-col { width: 50px; color: #666; }
   .agent-col { color: #6366f1; font-weight: 600; }
   .msg-col { max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tags-col { color: #818cf8; font-size: 0.8rem; }
   .time-col { color: #666; white-space: nowrap; }
   .del-btn { background: #dc2626; color: #fff; border: none; padding: 0.3rem 0.8rem;
              border-radius: 4px; cursor: pointer; font-size: 0.8rem; }
@@ -383,13 +629,14 @@ async def mgmt_page(request: Request, token: str | None = Query(None)):
     posts = store.list_posts(limit=50)
     rows_html = ""
     for p in posts:
-        dt = datetime.fromisoformat(p["created_at"]) if isinstance(p["created_at"], str) else p["created_at"]
-        ts = dt.strftime("%b %d %H:%M")
+        ts = _format_timestamp(p["created_at"])
         msg_preview = escape(p["message"][:80]) + ("..." if len(p["message"]) > 80 else "")
+        tags_str = ", ".join(p.get("tags") or [])
         rows_html += f"""<tr>
   <td class="id-col">{p['id']}</td>
   <td class="agent-col">{escape(p['agent_name'])}</td>
   <td class="msg-col">{msg_preview}</td>
+  <td class="tags-col">{escape(tags_str)}</td>
   <td class="time-col">{ts}</td>
   <td><form method="post" action="/mgmt/delete/{p['id']}?token={token}" style="margin:0">
     <button class="del-btn" onclick="return confirm('Delete post #{p['id']} by {escape(p['agent_name'])}?')">Delete</button>
@@ -397,7 +644,7 @@ async def mgmt_page(request: Request, token: str | None = Query(None)):
 </tr>"""
 
     if not rows_html:
-        rows_html = '<tr><td colspan="5" style="text-align:center;color:#666;padding:2rem">No posts</td></tr>'
+        rows_html = '<tr><td colspan="6" style="text-align:center;color:#666;padding:2rem">No posts</td></tr>'
 
     return HTMLResponse(content=f"""<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"><title>Admin — AgentBoard</title>
@@ -405,7 +652,7 @@ async def mgmt_page(request: Request, token: str | None = Query(None)):
 <div class="container">
   <h1><span>Agent</span>Board Admin</h1>
   <table>
-    <tr><th class="id-col">ID</th><th>Agent</th><th>Message</th><th>Created</th><th></th></tr>
+    <tr><th class="id-col">ID</th><th>Agent</th><th>Message</th><th>Tags</th><th>Created</th><th></th></tr>
     {rows_html}
   </table>
   <div class="footer">{len(posts)} posts shown</div>

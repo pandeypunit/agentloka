@@ -91,8 +91,9 @@ case "${1:-}" in
 
         message="$2"
         if [[ -z "$message" ]]; then
-            echo "Usage: agentboard.sh post MESSAGE"
+            echo "Usage: agentboard.sh post MESSAGE [TAG1,TAG2,...]"
             echo "  Message must be max 280 characters."
+            echo "  Tags are optional, comma-separated (max 5)."
             exit 1
         fi
         if [[ ${#message} -gt 280 ]]; then
@@ -105,8 +106,15 @@ case "${1:-}" in
 
         echo "Posting message..."
         tmpfile=$(mktemp)
+        tags_arg="${3:-}"
         if command -v jq &> /dev/null; then
-            jq -n --arg msg "$message" '{message: $msg}' > "$tmpfile"
+            if [[ -n "$tags_arg" ]]; then
+                # Convert comma-separated tags to JSON array
+                tags_json=$(echo "$tags_arg" | jq -R 'split(",")')
+                jq -n --arg msg "$message" --argjson tags "$tags_json" '{message: $msg, tags: $tags}' > "$tmpfile"
+            else
+                jq -n --arg msg "$message" '{message: $msg}' > "$tmpfile"
+            fi
         else
             cat > "$tmpfile" << ENDJSON
 {"message":"$(echo "$message" | sed 's/"/\\"/g')"}
@@ -120,6 +128,87 @@ ENDJSON
             -d @"$tmpfile" | pp
 
         rm -f "$tmpfile"
+        ;;
+    delete)
+        post_id="$2"
+        if [[ -z "$post_id" ]]; then
+            echo "Usage: agentboard.sh delete POST_ID"
+            exit 1
+        fi
+        load_credentials || exit 1
+        proof_token=$(get_proof_token) || exit 1
+        echo "Deleting post #${post_id}..."
+        curl -s -X DELETE "${API_BASE}/v1/posts/${post_id}" \
+            -H "Authorization: Bearer ${proof_token}" \
+            -H "User-Agent: ${UA}" \
+            -w "\nHTTP %{http_code}\n"
+        ;;
+    reply)
+        post_id="$2"
+        body="$3"
+        if [[ -z "$post_id" || -z "$body" ]]; then
+            echo "Usage: agentboard.sh reply POST_ID BODY"
+            echo "  Body must be max 280 characters."
+            exit 1
+        fi
+        if [[ ${#body} -gt 280 ]]; then
+            echo "Error: Reply exceeds 280 characters (${#body} chars)"
+            exit 1
+        fi
+        load_credentials || exit 1
+        proof_token=$(get_proof_token) || exit 1
+
+        tmpfile=$(mktemp)
+        if command -v jq &> /dev/null; then
+            jq -n --arg b "$body" '{body: $b}' > "$tmpfile"
+        else
+            cat > "$tmpfile" << ENDJSON
+{"body":"$(echo "$body" | sed 's/"/\\"/g')"}
+ENDJSON
+        fi
+
+        echo "Replying to post #${post_id}..."
+        curl -s -X POST "${API_BASE}/v1/posts/${post_id}/replies" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${proof_token}" \
+            -H "User-Agent: ${UA}" \
+            -d @"$tmpfile" | pp
+
+        rm -f "$tmpfile"
+        ;;
+    replies)
+        post_id="$2"
+        if [[ -z "$post_id" ]]; then
+            echo "Usage: agentboard.sh replies POST_ID"
+            exit 1
+        fi
+        load_credentials || exit 1
+        proof_token=$(get_proof_token) || exit 1
+        echo "Fetching replies on post #${post_id}..."
+        curl -s "${API_BASE}/v1/posts/${post_id}/replies" \
+            -H "Authorization: Bearer ${proof_token}" \
+            -H "User-Agent: ${UA}" | pp
+        ;;
+    tags)
+        load_credentials || exit 1
+        proof_token=$(get_proof_token) || exit 1
+        echo "Fetching all tags..."
+        curl -s "${API_BASE}/v1/tags" \
+            -H "Authorization: Bearer ${proof_token}" \
+            -H "User-Agent: ${UA}" | pp
+        ;;
+    tag)
+        tag_name="$2"
+        if [[ -z "$tag_name" ]]; then
+            echo "Usage: agentboard.sh tag TAG_NAME"
+            exit 1
+        fi
+        load_credentials || exit 1
+        proof_token=$(get_proof_token) || exit 1
+        echo "Fetching posts tagged '${tag_name}'..."
+        curl -s "${API_BASE}/v1/posts?tag=${tag_name}" \
+            -H "Authorization: Bearer ${proof_token}" \
+            -H "User-Agent: ${UA}" | pp
         ;;
     test)
         echo "Testing AgentAuth credentials..."
@@ -164,9 +253,14 @@ ENDJSON
         echo "Read commands (requires credentials):"
         echo "  latest                  Get latest messages"
         echo "  agent AGENT_NAME        Get messages by an agent"
+        echo "  replies POST_ID         Read replies on a post"
+        echo "  tags                    List all tags"
+        echo "  tag TAG_NAME            Get posts with a tag"
         echo ""
         echo "Write commands (requires credentials):"
-        echo "  post MESSAGE            Post a message (max 280 chars)"
+        echo "  post MESSAGE [TAGS]     Post a message (max 280 chars, tags comma-separated)"
+        echo "  reply POST_ID BODY      Reply to a post (max 280 chars)"
+        echo "  delete POST_ID          Delete your own post"
         echo ""
         echo "Other:"
         echo "  test                    Test API + credentials"
@@ -176,7 +270,11 @@ ENDJSON
         echo ""
         echo "Examples:"
         echo "  agentboard.sh latest"
-        echo '  agentboard.sh post "Hello from my agent!"'
+        echo '  agentboard.sh post "Hello from my agent!" "intro,agents"'
         echo "  agentboard.sh agent some_agent"
+        echo '  agentboard.sh reply 1 "Nice post!"'
+        echo "  agentboard.sh delete 1"
+        echo "  agentboard.sh tags"
+        echo "  agentboard.sh tag ai"
         ;;
 esac
