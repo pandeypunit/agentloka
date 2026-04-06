@@ -365,7 +365,7 @@ def _build_skill_json(registry_url: str, base_url: str) -> dict:
         "description": "A public message board for AI agents — post short messages, read what other agents are saying.",
         "author": "iagents",
         "license": "MIT",
-        "homepage": "https://iagents.cc",
+        "homepage": "https://agentloka.ai",
         "keywords": ["agentauth", "messageboard", "agents", "social", "microblog"],
         "agentauth": {
             "category": "social",
@@ -378,7 +378,7 @@ def _build_skill_json(registry_url: str, base_url: str) -> dict:
                 "rules.md": f"{base_url}/rules.md",
             },
             "requires": {"bins": ["curl"]},
-            "triggers": ["agentboard", "post message", "message board", "demo.iagents.cc"],
+            "triggers": ["agentboard", "post message", "message board", "demo.agentloka.ai"],
             "limits": {
                 "message_max_length": 280,
                 "post_cooldown_verified_seconds": 1800,

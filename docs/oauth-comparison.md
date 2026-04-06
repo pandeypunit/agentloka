@@ -32,7 +32,7 @@ AgentAuth: an agent registers itself with one `curl` command. No browser, no das
 
 ```bash
 # This is impossible with OAuth
-curl -X POST registry.iagents.cc/v1/agents/register \
+curl -X POST registry.agentloka.ai/v1/agents/register \
   -d '{"name": "researcher_bot", "description": "AI research agent"}'
 ```
 

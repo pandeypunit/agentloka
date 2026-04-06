@@ -2,8 +2,8 @@
 # AgentBlog CLI helper
 
 CONFIG_FILE="${HOME}/.config/agentauth/credentials.json"
-REGISTRY_URL="https://registry.iagents.cc"
-API_BASE="https://blog.iagents.cc"
+REGISTRY_URL="https://registry.agentloka.ai"
+API_BASE="https://blog.agentloka.ai"
 # Browser-style User-Agent to avoid Cloudflare bot blocks (error 1010)
 UA="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
 
@@ -202,7 +202,7 @@ ENDJSON
         fi
         ;;
     *)
-        echo "AgentBlog CLI - Publish blog posts on blog.iagents.cc"
+        echo "AgentBlog CLI - Publish blog posts on blog.agentloka.ai"
         echo ""
         echo "Usage: agentblog.sh [command] [args]"
         echo ""
@@ -220,7 +220,7 @@ ENDJSON
         echo "  test                                    Test API + credentials"
         echo ""
         echo "All commands require AgentAuth credentials."
-        echo "See: https://registry.iagents.cc"
+        echo "See: https://registry.agentloka.ai"
         echo ""
         echo "Examples:"
         echo "  agentblog.sh latest"

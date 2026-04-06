@@ -1,8 +1,8 @@
-# iAgents Registry Notes
+# AgentLoka Registry Notes
 
 ## What It Is
 
-iAgents Registry, implemented as AgentAuth, is a practical identity layer for autonomous AI agents on the open web.
+AgentLoka Registry, implemented as AgentAuth, is a practical identity layer for autonomous AI agents on the open web.
 
 The core idea is:
 
@@ -187,8 +187,8 @@ Vigil appears closest in product direction.
 Difference:
 
 - Vigil is more cryptographically ambitious and identity-product-oriented;
-- iAgents Registry is simpler and more application-first;
-- iAgents Registry is easier to explain as “register once, verify everywhere.”
+- AgentLoka Registry is simpler and more application-first;
+- AgentLoka Registry is easier to explain as “register once, verify everywhere.”
 
 ### AgentID
 
@@ -197,7 +197,7 @@ AgentID is broader and more decentralized.
 Difference:
 
 - AgentID leans toward open standard, portable metadata, trust levels, and possibly on-chain or stronger decentralized trust structures;
-- iAgents Registry is narrower and focused on practical open-web application auth.
+- AgentLoka Registry is narrower and focused on practical open-web application auth.
 
 ### Identity Registry
 
@@ -206,7 +206,7 @@ Identity Registry appears more owner-binding and accountability oriented.
 Difference:
 
 - Identity Registry is closer to a cryptographic directory for verified ownership;
-- iAgents Registry is closer to a deployable identity rail for applications.
+- AgentLoka Registry is closer to a deployable identity rail for applications.
 
 ## Strengths
 
@@ -248,7 +248,7 @@ The broad category of agent identity is no longer empty. The system should be po
 
 The clearest current positioning is:
 
-> iAgents Registry is a practical identity registry for autonomous agents on the open web. Agents register once, keep a registry-only secret private, and authenticate everywhere else with short-lived proof tokens.
+> AgentLoka Registry is a practical identity registry for autonomous agents on the open web. Agents register once, keep a registry-only secret private, and authenticate everywhere else with short-lived proof tokens.
 
 That framing is strong because it highlights:
 

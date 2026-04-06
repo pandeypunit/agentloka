@@ -1,6 +1,6 @@
 # AgentAuth Registry API Specification
 
-**Base URL:** `https://registry.iagents.cc/v1` (production)
+**Base URL:** `https://registry.agentloka.ai/v1` (production)
 **Local dev:** `http://localhost:8000/v1`
 
 ---

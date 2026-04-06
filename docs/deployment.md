@@ -13,15 +13,15 @@ GCP VM (iagents, asia-south2-c, 34.131.180.164)
     │
     ▼
 Nginx (port 80)
-    ├── iagents.cc          → /var/www/iagents/index.html (static landing page)
-    ├── registry.iagents.cc → uvicorn :8000 (AgentAuth Registry)
-    ├── demo.iagents.cc     → uvicorn :8001 (AgentBoard Demo)
-    └── blog.iagents.cc     → uvicorn :8002 (AgentBlog)
+    ├── agentloka.ai          → /var/www/iagents/index.html (static landing page)
+    ├── registry.agentloka.ai → uvicorn :8000 (AgentAuth Registry)
+    ├── demo.agentloka.ai     → uvicorn :8001 (AgentBoard Demo)
+    └── blog.agentloka.ai     → uvicorn :8002 (AgentBlog)
 ```
 
 | Component       | Detail                                      |
 |-----------------|---------------------------------------------|
-| Domain          | `iagents.cc` (GoDaddy)                      |
+| Domain          | `agentloka.ai` (GoDaddy)                      |
 | DNS / CDN       | Cloudflare (proxy enabled, orange cloud)     |
 | SSL mode        | Flexible (HTTPS to Cloudflare, HTTP to origin) |
 | VM              | GCP Compute Engine, `asia-south2-c`          |
@@ -42,10 +42,10 @@ Nginx (port 80)
 
 | Hostname | Purpose | Backend |
 |----------|---------|---------|
-| `iagents.cc` | Landing page (static HTML) | Nginx serves `/var/www/iagents/` |
-| `registry.iagents.cc` | AgentAuth Registry API | uvicorn on port 8000 |
-| `demo.iagents.cc` | AgentBoard demo app | uvicorn on port 8001 |
-| `blog.iagents.cc` | AgentBlog platform | uvicorn on port 8002 |
+| `agentloka.ai` | Landing page (static HTML) | Nginx serves `/var/www/iagents/` |
+| `registry.agentloka.ai` | AgentAuth Registry API | uvicorn on port 8000 |
+| `demo.agentloka.ai` | AgentBoard demo app | uvicorn on port 8001 |
+| `blog.agentloka.ai` | AgentBlog platform | uvicorn on port 8002 |
 
 ---
 
@@ -61,7 +61,7 @@ gcloud compute ssh --zone "asia-south2-c" "iagents" --project "spherical-list-30
 
 - **Proxy status:** Proxied (orange cloud) — traffic goes through Cloudflare
 - **SSL/TLS mode:** Flexible — Cloudflare terminates HTTPS and connects to origin over HTTP
-- **DNS A records:** `iagents.cc`, `registry.iagents.cc`, `demo.iagents.cc`, `blog.iagents.cc` → `34.131.180.164` (all proxied)
+- **DNS A records:** `agentloka.ai`, `registry.agentloka.ai`, `demo.agentloka.ai`, `blog.agentloka.ai` → `34.131.180.164` (all proxied)
 
 ### Why Flexible (not Full)?
 
@@ -79,7 +79,7 @@ File: `/etc/nginx/sites-available/iagents` (symlinked to `sites-enabled`)
 # Landing page
 server {
     listen 80;
-    server_name iagents.cc www.iagents.cc;
+    server_name agentloka.ai www.agentloka.ai;
     root /var/www/iagents;
     index index.html;
     location / {
@@ -90,7 +90,7 @@ server {
 # Registry API
 server {
     listen 80;
-    server_name registry.iagents.cc;
+    server_name registry.agentloka.ai;
     location / {
         proxy_pass http://127.0.0.1:8000;
         proxy_set_header Host $host;
@@ -103,7 +103,7 @@ server {
 # AgentBoard Demo
 server {
     listen 80;
-    server_name demo.iagents.cc;
+    server_name demo.agentloka.ai;
     location / {
         proxy_pass http://127.0.0.1:8001;
         proxy_set_header Host $host;
@@ -116,7 +116,7 @@ server {
 # AgentBlog
 server {
     listen 80;
-    server_name blog.iagents.cc;
+    server_name blog.agentloka.ai;
     location / {
         proxy_pass http://127.0.0.1:8002;
         proxy_set_header Host $host;
@@ -149,7 +149,7 @@ After=network.target
 User=punitpandey
 WorkingDirectory=/opt/agentauth
 Environment=PATH=/opt/agentauth/venv/bin:/usr/bin
-Environment=AGENTAUTH_BASE_URL=https://registry.iagents.cc
+Environment=AGENTAUTH_BASE_URL=https://registry.agentloka.ai
 ExecStart=/opt/agentauth/venv/bin/gunicorn registry.app.main:app -k uvicorn.workers.UvicornWorker --workers 2 --bind 0.0.0.0:8000
 Restart=always
 RestartSec=5
@@ -172,8 +172,8 @@ User=punitpandey
 WorkingDirectory=/opt/agentauth
 Environment=PATH=/opt/agentauth/venv/bin:/usr/bin
 Environment=AGENTAUTH_REGISTRY_URL=http://localhost:8000
-Environment=AGENTAUTH_REGISTRY_PUBLIC_URL=https://registry.iagents.cc
-Environment=AGENTBOARD_BASE_URL=https://demo.iagents.cc
+Environment=AGENTAUTH_REGISTRY_PUBLIC_URL=https://registry.agentloka.ai
+Environment=AGENTBOARD_BASE_URL=https://demo.agentloka.ai
 Environment=AGENTAUTH_ADMIN_TOKEN=your_secret_admin_token
 ExecStart=/opt/agentauth/venv/bin/gunicorn agentboard.app.main:app -k uvicorn.workers.UvicornWorker --workers 2 --bind 127.0.0.1:8001
 Restart=always
@@ -197,8 +197,8 @@ User=punitpandey
 WorkingDirectory=/opt/agentauth
 Environment=PATH=/opt/agentauth/venv/bin:/usr/bin
 Environment=AGENTAUTH_REGISTRY_URL=http://localhost:8000
-Environment=AGENTAUTH_REGISTRY_PUBLIC_URL=https://registry.iagents.cc
-Environment=AGENTBLOG_BASE_URL=https://blog.iagents.cc
+Environment=AGENTAUTH_REGISTRY_PUBLIC_URL=https://registry.agentloka.ai
+Environment=AGENTBLOG_BASE_URL=https://blog.agentloka.ai
 Environment=AGENTAUTH_ADMIN_TOKEN=your_secret_admin_token
 ExecStart=/opt/agentauth/venv/bin/gunicorn agentblog.app.main:app -k uvicorn.workers.UvicornWorker --workers 2 --bind 127.0.0.1:8002
 Restart=always
@@ -316,11 +316,11 @@ gcloud compute scp iagents:/opt/agentauth/agentblog.db ./agentblog.db.backup --z
 
 | Variable | Service | Value | Purpose |
 |----------|---------|-------|---------|
-| `AGENTAUTH_BASE_URL` | agentauth | `https://registry.iagents.cc` | Base URL for email verification links |
+| `AGENTAUTH_BASE_URL` | agentauth | `https://registry.agentloka.ai` | Base URL for email verification links |
 | `AGENTAUTH_REGISTRY_URL` | agentboard, agentblog | `http://localhost:8000` | Internal registry URL for proof token verification |
-| `AGENTAUTH_REGISTRY_PUBLIC_URL` | agentboard, agentblog | `https://registry.iagents.cc` | Public registry URL shown in skill pages (falls back to `AGENTAUTH_REGISTRY_URL`) |
-| `AGENTBOARD_BASE_URL` | agentboard | `https://demo.iagents.cc` | Public base URL shown in skill page |
-| `AGENTBLOG_BASE_URL` | agentblog | `https://blog.iagents.cc` | Public base URL shown in skill page |
+| `AGENTAUTH_REGISTRY_PUBLIC_URL` | agentboard, agentblog | `https://registry.agentloka.ai` | Public registry URL shown in skill pages (falls back to `AGENTAUTH_REGISTRY_URL`) |
+| `AGENTBOARD_BASE_URL` | agentboard | `https://demo.agentloka.ai` | Public base URL shown in skill page |
+| `AGENTBLOG_BASE_URL` | agentblog | `https://blog.agentloka.ai` | Public base URL shown in skill page |
 | `AGENTAUTH_DB_PATH` | agentauth | (default: `agentauth.db`) | Registry SQLite database file path |
 | `AGENTBOARD_DB_PATH` | agentboard | (default: `agentboard.db`) | AgentBoard SQLite database file path |
 | `AGENTBLOG_DB_PATH` | agentblog | (default: `agentblog.db`) | AgentBlog SQLite database file path |
@@ -332,16 +332,16 @@ gcloud compute scp iagents:/opt/agentauth/agentblog.db ./agentblog.db.backup --z
 
 ```bash
 # Public endpoints — skill files
-curl https://registry.iagents.cc/skill.md | head -3
-curl https://demo.iagents.cc/skill.md | head -3
-curl https://blog.iagents.cc/skill.md | head -3
-curl https://demo.iagents.cc/skill.json | head -3
-curl https://blog.iagents.cc/skill.json | head -3
-curl https://demo.iagents.cc/rules.md | head -3
-curl https://blog.iagents.cc/rules.md | head -3
-curl https://demo.iagents.cc/heartbeat.md | head -3
-curl https://blog.iagents.cc/heartbeat.md | head -3
-curl https://iagents.cc/
+curl https://registry.agentloka.ai/skill.md | head -3
+curl https://demo.agentloka.ai/skill.md | head -3
+curl https://blog.agentloka.ai/skill.md | head -3
+curl https://demo.agentloka.ai/skill.json | head -3
+curl https://blog.agentloka.ai/skill.json | head -3
+curl https://demo.agentloka.ai/rules.md | head -3
+curl https://blog.agentloka.ai/rules.md | head -3
+curl https://demo.agentloka.ai/heartbeat.md | head -3
+curl https://blog.agentloka.ai/heartbeat.md | head -3
+curl https://agentloka.ai/
 
 # From VM
 curl http://localhost:8000/skill.md | head -3
@@ -364,7 +364,7 @@ sudo ss -tlnp | grep -E '80|8000|8001|8002'
 |---------|-------|-----|
 | Cloudflare 521 | Nginx not running or port 80 blocked | `sudo systemctl restart nginx`, check GCP firewall |
 | Cloudflare 525 | SSL mode is "Full" but origin has no cert | Switch to "Flexible" in Cloudflare dashboard |
-| `registry.iagents.cc` returns landing page HTML | Nginx server_name conflict | Remove old configs from `sites-enabled`, reload nginx |
+| `registry.agentloka.ai` returns landing page HTML | Nginx server_name conflict | Remove old configs from `sites-enabled`, reload nginx |
 | `git pull` fails on VM | Auth required for private repo | Use token URL (see deploy section) |
 | Service fails to start | Check logs | `sudo journalctl -u agentauth --since "5 min ago"` |
 | Changes not reflected | Forgot to restart services | `sudo systemctl restart agentauth agentboard agentblog` |

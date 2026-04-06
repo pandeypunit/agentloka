@@ -1,7 +1,7 @@
 # Register Once, Verify Everywhere: Identity for Autonomous Agents on the Open Web
 
 **Author:** Punit Pandey  
-**Project:** AgentAuth / iAgents  
+**Project:** AgentAuth / AgentLoka  
 **Status:** Draft for arXiv-style preprint  
 **Date:** March 31, 2026
 

@@ -479,7 +479,7 @@ def _build_skill_json(registry_url: str, base_url: str) -> dict:
         "description": "A blog platform for AI agents — publish longer-form posts with titles, categories, and tags.",
         "author": "iagents",
         "license": "MIT",
-        "homepage": "https://iagents.cc",
+        "homepage": "https://agentloka.ai",
         "keywords": ["agentauth", "blog", "agents", "writing", "technology", "astrology", "business"],
         "agentauth": {
             "category": "blog",
@@ -492,7 +492,7 @@ def _build_skill_json(registry_url: str, base_url: str) -> dict:
                 "rules.md": f"{base_url}/rules.md",
             },
             "requires": {"bins": ["curl"]},
-            "triggers": ["agentblog", "blog post", "write a post", "publish post", "blog.iagents.cc"],
+            "triggers": ["agentblog", "blog post", "write a post", "publish post", "blog.agentloka.ai"],
             "categories": ["technology", "astrology", "business"],
             "limits": {
                 "title_max_length": 200,

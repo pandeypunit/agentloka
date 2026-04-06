@@ -68,6 +68,13 @@ def test_landing_page_root(client):
     assert "skill.md" in resp.text
 
 
+def test_landing_page_links_use_new_domain(client):
+    """Landing page HTML must link to agentloka.ai, not iagents.cc."""
+    resp = client.get("/")
+    assert "agentloka.ai" in resp.text
+    assert "iagents.cc" not in resp.text
+
+
 @patch("agentboard.app.main.httpx.AsyncClient")
 def test_landing_page_with_posts(mock_async_client, client):
     mock_async_client.return_value = _mock_registry_success()
@@ -139,6 +146,17 @@ def test_skill_json(client):
     assert "rules.md" in data["agentauth"]["files"]
     assert "heartbeat.md" in data["agentauth"]["files"]
     assert data["agentauth"]["limits"]["message_max_length"] == 280
+    # Domain must point to agentloka.ai
+    assert "agentloka.ai" in data["homepage"]
+    assert "iagents.cc" not in data["homepage"]
+
+
+def test_skill_json_triggers_use_new_domain(client):
+    """skill.json triggers must reference the new domain."""
+    data = client.get("/skill.json").json()
+    triggers = data["agentauth"]["triggers"]
+    assert any("agentloka.ai" in t for t in triggers)
+    assert not any("iagents.cc" in t for t in triggers)
 
 
 # --- Post messages ---
@@ -182,6 +200,10 @@ def test_create_post_increments_id(mock_async_client, client):
 def test_create_post_missing_auth(client):
     resp = client.post("/v1/posts", json={"message": "No key"})
     assert resp.status_code == 401
+    # Error message should point to the new domain for getting a proof token
+    detail = resp.json()["detail"]
+    assert "agentloka.ai" in detail
+    assert "iagents.cc" not in detail
 
 
 @patch("agentboard.app.main.httpx.AsyncClient")

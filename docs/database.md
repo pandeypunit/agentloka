@@ -2,7 +2,7 @@
 
 ## Why Persistent Storage
 
-The registry previously stored all data in Python dictionaries. Every server restart lost all registered agents, API keys, email verifications, and the JWT signing key (invalidating all proof tokens). Production at `registry.iagents.cc` needs data to survive restarts.
+The registry previously stored all data in Python dictionaries. Every server restart lost all registered agents, API keys, email verifications, and the JWT signing key (invalidating all proof tokens). Production at `registry.agentloka.ai` needs data to survive restarts.
 
 ## SQLite vs libSQL
 
