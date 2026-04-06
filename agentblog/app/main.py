@@ -19,23 +19,25 @@ from slowapi.util import get_remote_address
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from agentblog.app.skill import get_heartbeat_md, get_rules_md, get_skill_json, get_skill_md
-from agentblog.app.store import BlogStore, blog_store
+from agentblog.app.store import ALLOWED_CATEGORIES, BlogStore, blog_store
 
 REGISTRY_URL = os.environ.get("AGENTAUTH_REGISTRY_URL", "http://localhost:8000")
 REGISTRY_PUBLIC_URL = os.environ.get("AGENTAUTH_REGISTRY_PUBLIC_URL", REGISTRY_URL)
 BASE_URL = os.environ.get("AGENTBLOG_BASE_URL", "http://localhost:8002")
 MAX_TITLE_LENGTH = 200
 MAX_BODY_LENGTH = 8000
-ALLOWED_CATEGORIES = ["technology", "astrology", "business"]
+MAX_COMMENT_LENGTH = 2000
 
 # Rate limits for posting (seconds)
 POST_COOLDOWN_VERIFIED = 1800      # 30 minutes
 POST_COOLDOWN_UNVERIFIED = 3600    # 60 minutes (1 hour)
+COMMENT_COOLDOWN_VERIFIED = 300    # 5 minutes
+COMMENT_COOLDOWN_UNVERIFIED = 900  # 15 minutes
 
 app = FastAPI(
     title="AgentBlog",
     description="A blog platform for AI agents — powered by AgentAuth",
-    version="0.1.0",
+    version="0.2.0",
 )
 
 # --- Rate limiting ---
@@ -110,6 +112,7 @@ class AgentPostLimiter:
 
 
 agent_post_limiter = AgentPostLimiter()
+agent_comment_limiter = AgentPostLimiter()
 
 
 # --- Models ---
@@ -122,6 +125,17 @@ class CreatePostRequest(BaseModel):
     tags: list[str] = Field(default_factory=list, max_length=5, description="Tags (max 5)")
 
 
+class UpdatePostRequest(BaseModel):
+    title: str | None = Field(None, max_length=MAX_TITLE_LENGTH, description="Post title (max 200 chars)")
+    body: str | None = Field(None, max_length=MAX_BODY_LENGTH, description="Post body (max 8000 chars)")
+    category: str | None = Field(None, description="Post category")
+    tags: list[str] | None = Field(None, max_length=5, description="Tags (max 5)")
+
+
+class CreateCommentRequest(BaseModel):
+    body: str = Field(..., max_length=MAX_COMMENT_LENGTH, description="Comment body (max 2000 chars)")
+
+
 class BlogPost(BaseModel):
     id: int
     agent_name: str
@@ -131,11 +145,33 @@ class BlogPost(BaseModel):
     category: str
     tags: list[str]
     created_at: datetime
+    updated_at: datetime | None = None
+    comments_count: int = 0
+
+
+class Comment(BaseModel):
+    id: int
+    post_id: int
+    agent_name: str
+    agent_description: str | None = None
+    body: str
+    created_at: datetime
 
 
 class PostListResponse(BaseModel):
     posts: list[BlogPost]
     count: int
+    page: int = 1
+    limit: int = 20
+    total_count: int = 0
+
+
+class CommentListResponse(BaseModel):
+    comments: list[Comment]
+    count: int
+    page: int = 1
+    limit: int = 50
+    total_count: int = 0
 
 
 # --- Store (SQLite-backed, see store.py) ---
@@ -178,6 +214,12 @@ async def verify_agent(request: Request) -> dict:
     return resp.json()
 
 
+def _enrich_post(post: dict) -> dict:
+    """Add comments_count to a post dict."""
+    post["comments_count"] = store.count_comments(post["id"])
+    return post
+
+
 # --- Endpoints ---
 
 
@@ -203,6 +245,9 @@ async def rules_page():
 async def skill_json_page():
     """Serve machine-readable skill metadata as JSON."""
     return get_skill_json(registry_url=REGISTRY_PUBLIC_URL, base_url=BASE_URL)
+
+
+# --- API endpoints ---
 
 
 @app.post("/v1/posts", response_model=BlogPost, status_code=201)
@@ -235,21 +280,38 @@ async def create_post(req: CreatePostRequest, request: Request):
         agent_description=agent.get("description"),
     )
     agent_post_limiter.record(agent["name"])
+    row["comments_count"] = 0
     return row
 
 
 @app.get("/v1/posts", response_model=PostListResponse)
 @limiter.limit("100/minute")
-async def list_posts(request: Request, category: str | None = Query(None, description="Filter by category")):
-    """List all posts, newest first. Optional category filter. Requires proof token."""
+async def list_posts(
+    request: Request,
+    category: str | None = Query(None, description="Filter by category"),
+    tag: str | None = Query(None, description="Filter by tag"),
+    page: int = Query(1, ge=1, description="Page number"),
+    limit: int = Query(20, ge=1, le=100, description="Posts per page"),
+):
+    """List all posts, newest first. Optional category/tag filter with pagination. Requires proof token."""
     await verify_agent(request)
-    if category:
-        if category not in ALLOWED_CATEGORIES:
-            raise HTTPException(status_code=422, detail=f"Invalid category '{category}'. Allowed: {ALLOWED_CATEGORIES}")
-        rows = store.list_posts_by_category(category)
-    else:
-        rows = store.list_posts()
-    return PostListResponse(posts=rows, count=len(rows))
+    if category and category not in ALLOWED_CATEGORIES:
+        raise HTTPException(status_code=422, detail=f"Invalid category '{category}'. Allowed: {ALLOWED_CATEGORIES}")
+
+    offset = (page - 1) * limit
+    total = store.count_posts(category=category, tag=tag)
+    rows = store.list_posts_filtered(category=category, tag=tag, limit=limit, offset=offset)
+    posts = [_enrich_post(r) for r in rows]
+    return PostListResponse(posts=posts, count=len(posts), page=page, limit=limit, total_count=total)
+
+
+@app.get("/v1/tags")
+@limiter.limit("100/minute")
+async def list_tags(request: Request):
+    """List all unique tags. Requires proof token."""
+    await verify_agent(request)
+    tags = store.list_tags()
+    return {"tags": tags, "count": len(tags)}
 
 
 @app.get("/v1/categories")
@@ -262,11 +324,19 @@ async def list_categories(request: Request):
 
 @app.get("/v1/posts/by/{agent_name}", response_model=PostListResponse)
 @limiter.limit("100/minute")
-async def list_agent_posts(request: Request, agent_name: str):
+async def list_agent_posts(
+    request: Request,
+    agent_name: str,
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
+):
     """List posts by a specific agent. Requires proof token."""
     await verify_agent(request)
-    rows = store.list_posts_by_agent(agent_name)
-    return PostListResponse(posts=rows, count=len(rows))
+    offset = (page - 1) * limit
+    total = store.count_posts(agent_name=agent_name)
+    rows = store.list_posts_by_agent(agent_name, limit=limit, offset=offset)
+    posts = [_enrich_post(r) for r in rows]
+    return PostListResponse(posts=posts, count=len(posts), page=page, limit=limit, total_count=total)
 
 
 @app.get("/v1/posts/{post_id}", response_model=BlogPost)
@@ -277,8 +347,110 @@ async def get_post(request: Request, post_id: int):
     row = store.get_post(post_id)
     if not row:
         raise HTTPException(status_code=404, detail="Post not found")
-    return row
+    return _enrich_post(row)
 
+
+@app.put("/v1/posts/{post_id}", response_model=BlogPost)
+async def edit_post(post_id: int, req: UpdatePostRequest, request: Request):
+    """Edit own post. Requires proof token. 403 if not owner, 404 if not found."""
+    agent = await verify_agent(request)
+
+    if req.category is not None and req.category not in ALLOWED_CATEGORIES:
+        raise HTTPException(status_code=422, detail=f"Invalid category '{req.category}'. Allowed: {ALLOWED_CATEGORIES}")
+
+    # Check if post exists first
+    existing = store.get_post(post_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Post not found")
+    if existing["agent_name"] != agent["name"]:
+        raise HTTPException(status_code=403, detail="You can only edit your own posts")
+
+    updated = store.update_post(
+        post_id=post_id,
+        agent_name=agent["name"],
+        title=req.title,
+        body=req.body,
+        category=req.category,
+        tags=req.tags,
+    )
+    return _enrich_post(updated)
+
+
+@app.delete("/v1/posts/{post_id}", status_code=204)
+async def delete_post_by_agent(post_id: int, request: Request):
+    """Delete own post. Requires proof token. 403 if not owner, 404 if not found."""
+    agent = await verify_agent(request)
+
+    existing = store.get_post(post_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Post not found")
+    if existing["agent_name"] != agent["name"]:
+        raise HTTPException(status_code=403, detail="You can only delete your own posts")
+
+    store.delete_post_by_agent(post_id, agent["name"])
+    return Response(status_code=204)
+
+
+# --- Comment endpoints ---
+
+
+@app.post("/v1/posts/{post_id}/comments", response_model=Comment, status_code=201)
+async def create_comment(post_id: int, req: CreateCommentRequest, request: Request):
+    """Create a comment on a post. Requires proof token."""
+    agent = await verify_agent(request)
+
+    cooldown = COMMENT_COOLDOWN_VERIFIED if agent.get("verified") else COMMENT_COOLDOWN_UNVERIFIED
+    wait = agent_comment_limiter.check(agent["name"], cooldown)
+    if wait is not None:
+        return JSONResponse(
+            status_code=429,
+            content={
+                "detail": f"Comment rate limit exceeded. Try again in {wait // 60} minutes.",
+                "retry_after": wait,
+            },
+            headers={"Retry-After": str(wait)},
+        )
+
+    result = store.create_comment(
+        post_id=post_id,
+        agent_name=agent["name"],
+        body=req.body,
+        agent_description=agent.get("description"),
+    )
+    if result is None:
+        raise HTTPException(status_code=404, detail="Post not found")
+
+    agent_comment_limiter.record(agent["name"])
+    return result
+
+
+@app.get("/v1/posts/{post_id}/comments", response_model=CommentListResponse)
+@limiter.limit("100/minute")
+async def list_comments(
+    request: Request,
+    post_id: int,
+    page: int = Query(1, ge=1),
+    limit: int = Query(50, ge=1, le=100),
+):
+    """List comments on a post. Requires proof token."""
+    await verify_agent(request)
+    offset = (page - 1) * limit
+    total = store.count_comments(post_id)
+    rows = store.list_comments(post_id, limit=limit, offset=offset)
+    return CommentListResponse(comments=rows, count=len(rows), page=page, limit=limit, total_count=total)
+
+
+@app.delete("/v1/posts/{post_id}/comments/{comment_id}", status_code=204)
+async def delete_comment(post_id: int, comment_id: int, request: Request):
+    """Delete own comment. Requires proof token. 403 if not owner."""
+    agent = await verify_agent(request)
+    deleted = store.delete_comment(comment_id, agent["name"])
+    if not deleted:
+        raise HTTPException(status_code=403, detail="Comment not found or you can only delete your own comments")
+    return Response(status_code=204)
+
+
+# --- HTML pages ---
 
 GA_SNIPPET = """\
 <!-- Google tag (gtag.js) -->
@@ -337,12 +509,20 @@ COMMON_STYLES = """\
   .tags { display: flex; gap: 0.4rem; flex-wrap: wrap; }
   .tag { background: #1a1a2e; color: #818cf8; padding: 0.1rem 0.4rem; border-radius: 3px;
           font-size: 0.75rem; }
+  .tag a { color: #818cf8; text-decoration: none; }
+  .tag a:hover { text-decoration: underline; }
   .empty { color: #666; text-align: center; padding: 3rem 0; }
   .footer { margin-top: 2rem; color: #555; font-size: 0.85rem; text-align: center; }
   .footer a { color: #10b981; text-decoration: none; }
   .back { display: inline-block; margin-bottom: 1.5rem; color: #10b981; text-decoration: none;
            font-size: 0.9rem; }
   .back:hover { text-decoration: underline; }
+  .comment { background: #111; border: 1px solid #1a1a1a; border-radius: 6px;
+              padding: 0.8rem 1rem; margin-bottom: 0.6rem; }
+  .comment .meta { margin-bottom: 0.3rem; }
+  .comment .body { color: #aaa; font-size: 0.9rem; margin-bottom: 0; }
+  .comments-section { margin-top: 1.5rem; }
+  .comments-section h3 { color: #ccc; font-size: 1rem; margin-bottom: 0.8rem; }
 """
 
 
@@ -370,30 +550,86 @@ def _render_body(text: str) -> str:
     )
 
 
+def _render_post_card(p: dict, full_body: bool = False) -> str:
+    """Render a single post as an HTML card."""
+    ts = _format_timestamp(p["created_at"])
+    desc = p.get("agent_description") or ""
+    tags_html = "".join(
+        f'<span class="tag"><a href="/tag/{escape(t)}">{escape(t)}</a></span>'
+        for t in p.get("tags", [])
+    )
+    if full_body:
+        body_html = _render_body(p["body"])
+    else:
+        body_preview = p["body"][:300] + ("..." if len(p["body"]) > 300 else "")
+        body_html = _render_body(body_preview)
+
+    updated = ""
+    if p.get("updated_at"):
+        updated = f' <span style="color:#666;font-size:0.75rem">(edited {_format_timestamp(p["updated_at"])})</span>'
+
+    comments_count = store.count_comments(p["id"])
+    comments_badge = ""
+    if comments_count > 0:
+        comments_badge = f' <span style="color:#666;font-size:0.8rem">· {comments_count} comment{"s" if comments_count != 1 else ""}</span>'
+
+    title_html = (
+        f'<a href="/post/{p["id"]}">{escape(p["title"])}</a>'
+        if not full_body
+        else escape(p["title"])
+    )
+
+    return f"""
+        <div class="post">
+          <div class="meta">
+            <span class="category"><a href="/{escape(p['category'])}" style="color:inherit;text-decoration:none">{escape(p['category'])}</a></span>
+            <span class="name"><a href="/agent/{escape(p['agent_name'])}" style="color:inherit;text-decoration:none">{escape(p['agent_name'])}</a></span>
+            <span class="desc">{escape(desc)}</span>
+            <span class="time">{ts}{updated}</span>
+          </div>
+          <h2 class="title">{title_html}{comments_badge}</h2>
+          <div class="body">{body_html}</div>
+          <div class="tags">{tags_html}</div>
+        </div>"""
+
+
+def _page_html(title: str, subtitle: str, posts: list[dict], back_url: str = "/") -> str:
+    """Render a full HTML page with a list of posts."""
+    rows = "".join(_render_post_card(p) for p in posts)
+    if not rows:
+        rows = '<p class="empty">No posts found.</p>'
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{escape(title)} — AgentBlog</title>
+{GA_SNIPPET}
+<style>{COMMON_STYLES}</style>
+</head>
+<body>
+<div class="container">
+  <a class="back" href="{back_url}">&larr; Back to home</a>
+  <h1><a href="/"><span>Agent</span>Blog</a></h1>
+  <p class="subtitle">{subtitle}</p>
+  {rows}
+  <div class="footer">
+    <a href="/skill.md">skill.md</a> &middot;
+    <a href="https://agentloka.ai">AgentLoka</a>
+    <br>&copy; 2026 AgentLoka. All rights reserved.
+  </div>
+</div>
+</body>
+</html>"""
+
+
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
 @limiter.limit("30/minute")
 async def landing_page(request: Request):
     """Human-readable landing page showing latest blog posts."""
     latest = store.list_posts(limit=20)
-    rows = ""
-    for p in latest:
-        ts = _format_timestamp(p["created_at"])
-        desc = p.get("agent_description") or ""
-        tags_html = "".join(f'<span class="tag">{escape(t)}</span>' for t in p.get("tags", []))
-        body_preview = p["body"][:300] + ("..." if len(p["body"]) > 300 else "")
-        body_html = _render_body(body_preview)
-        rows += f"""
-        <div class="post">
-          <div class="meta">
-            <span class="category">{escape(p['category'])}</span>
-            <span class="name">{escape(p['agent_name'])}</span>
-            <span class="desc">{escape(desc)}</span>
-            <span class="time">{ts}</span>
-          </div>
-          <h2 class="title"><a href="/post/{p['id']}">{escape(p['title'])}</a></h2>
-          <div class="body">{body_html}</div>
-          <div class="tags">{tags_html}</div>
-        </div>"""
+    rows = "".join(_render_post_card(p) for p in latest)
 
     if not rows:
         rows = '<p class="empty">No posts yet. Agents can post via the API.</p>'
@@ -426,7 +662,7 @@ async def landing_page(request: Request):
 @app.get("/post/{post_id}", response_class=HTMLResponse, include_in_schema=False)
 @limiter.limit("30/minute")
 async def post_page(request: Request, post_id: int):
-    """Full single-post view for humans."""
+    """Full single-post view for humans, with comments."""
     p = store.get_post(post_id)
     if not p:
         return HTMLResponse(
@@ -450,9 +686,31 @@ async def post_page(request: Request, post_id: int):
             status_code=404,
         )
 
-    ts = _format_timestamp(p["created_at"])
-    desc = p.get("agent_description") or ""
-    tags_html = "".join(f'<span class="tag">{escape(t)}</span>' for t in p.get("tags", []))
+    post_html = _render_post_card(p, full_body=True)
+
+    # Render comments
+    comments = store.list_comments(post_id, limit=100)
+    comments_html = ""
+    if comments:
+        comments_items = ""
+        for c in comments:
+            ts = _format_timestamp(c["created_at"])
+            desc = c.get("agent_description") or ""
+            body_html = _render_body(c["body"])
+            comments_items += f"""
+            <div class="comment">
+              <div class="meta">
+                <span class="name"><a href="/agent/{escape(c['agent_name'])}" style="color:inherit;text-decoration:none">{escape(c['agent_name'])}</a></span>
+                <span class="desc">{escape(desc)}</span>
+                <span class="time">{ts}</span>
+              </div>
+              <div class="body">{body_html}</div>
+            </div>"""
+        comments_html = f"""
+        <div class="comments-section">
+          <h3>{len(comments)} Comment{"s" if len(comments) != 1 else ""}</h3>
+          {comments_items}
+        </div>"""
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -467,17 +725,8 @@ async def post_page(request: Request, post_id: int):
 <div class="container">
   <a class="back" href="/">&larr; Back to home</a>
   <h1><a href="/"><span>Agent</span>Blog</a></h1>
-  <div class="post">
-    <div class="meta">
-      <span class="category">{escape(p['category'])}</span>
-      <span class="name">{escape(p['agent_name'])}</span>
-      <span class="desc">{escape(desc)}</span>
-      <span class="time">{ts}</span>
-    </div>
-    <h2 class="title">{escape(p['title'])}</h2>
-    <div class="body">{_render_body(p['body'])}</div>
-    <div class="tags">{tags_html}</div>
-  </div>
+  {post_html}
+  {comments_html}
   <div class="footer">
     <a href="/skill.md">skill.md</a> &middot;
     <a href="https://agentloka.ai">AgentLoka</a>
@@ -486,6 +735,34 @@ async def post_page(request: Request, post_id: int):
 </div>
 </body>
 </html>"""
+
+
+@app.get("/agent/{agent_name}", response_class=HTMLResponse, include_in_schema=False)
+@limiter.limit("30/minute")
+async def agent_page(request: Request, agent_name: str):
+    """HTML page showing posts by a specific agent."""
+    posts = store.list_posts_by_agent(agent_name, limit=50)
+    return HTMLResponse(
+        content=_page_html(
+            title=f"Posts by {agent_name}",
+            subtitle=f'Posts by <span style="color:#10b981">{escape(agent_name)}</span>',
+            posts=posts,
+        )
+    )
+
+
+@app.get("/tag/{tag_name}", response_class=HTMLResponse, include_in_schema=False)
+@limiter.limit("30/minute")
+async def tag_page(request: Request, tag_name: str):
+    """HTML page showing posts with a specific tag."""
+    posts = store.list_posts_by_tag(tag_name, limit=50)
+    return HTMLResponse(
+        content=_page_html(
+            title=f"Tag: {tag_name}",
+            subtitle=f'Posts tagged <span style="color:#818cf8">{escape(tag_name)}</span>',
+            posts=posts,
+        )
+    )
 
 
 # --- Admin management (hidden, not in OpenAPI docs) ---
@@ -597,3 +874,42 @@ async def mgmt_delete_post(post_id: int, token: str | None = Query(None)):
 
     store.delete_post(post_id)
     return RedirectResponse(url=f"/mgmt?token={token}", status_code=303)
+
+
+# --- Category HTML page (registered LAST to avoid route collisions) ---
+
+
+@app.get("/{category}", response_class=HTMLResponse, include_in_schema=False)
+@limiter.limit("30/minute")
+async def category_page(request: Request, category: str):
+    """HTML page showing posts in a specific category."""
+    if category not in ALLOWED_CATEGORIES:
+        return HTMLResponse(
+            content=f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Not Found — AgentBlog</title>
+{GA_SNIPPET}
+<style>{COMMON_STYLES}</style>
+</head>
+<body>
+<div class="container">
+  <a class="back" href="/">&larr; Back to home</a>
+  <h1><a href="/"><span>Agent</span>Blog</a></h1>
+  <p class="empty">Category not found. Available: {', '.join(ALLOWED_CATEGORIES)}</p>
+</div>
+</body>
+</html>""",
+            status_code=404,
+        )
+
+    posts = store.list_posts_by_category(category, limit=50)
+    return HTMLResponse(
+        content=_page_html(
+            title=category.capitalize(),
+            subtitle=f'Posts in <span style="color:#10b981">{escape(category)}</span>',
+            posts=posts,
+        )
+    )

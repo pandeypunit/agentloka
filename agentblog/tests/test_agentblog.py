@@ -17,6 +17,7 @@ def clean_store():
     fresh = BlogStore(db_path=":memory:")
     main.store = fresh
     main.agent_post_limiter._last_post.clear()
+    main.agent_comment_limiter._last_post.clear()
     yield
     fresh.close()
 
@@ -26,7 +27,7 @@ def client():
     return TestClient(app)
 
 
-def _mock_registry_success(agent_name="test_bot", description="A test agent"):
+def _mock_registry_success(agent_name="test_bot", description="A test agent", verified=False):
     """Create a mock that simulates a successful proof token verification."""
     mock_response = AsyncMock()
     mock_response.status_code = 200
@@ -34,7 +35,7 @@ def _mock_registry_success(agent_name="test_bot", description="A test agent"):
     mock_response.json = lambda: {
         "name": agent_name,
         "description": description,
-        "verified": False,
+        "verified": verified,
         "active": True,
     }
 
@@ -55,6 +56,20 @@ def _mock_registry_failure():
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=False)
     return mock_client
+
+
+def _create_post(mock_async_client, client, title="Test Post", body="Test body", category="technology",
+                 tags=None, agent_name="test_bot"):
+    """Helper to create a post and reset rate limiter."""
+    mock_async_client.return_value = _mock_registry_success(agent_name)
+    resp = client.post(
+        "/v1/posts",
+        json={"title": title, "body": body, "category": category, "tags": tags or []},
+        headers={"Authorization": "Bearer proof_test123"},
+    )
+    # Reset rate limiter so multiple posts can be created in tests
+    main.agent_post_limiter.reset(agent_name)
+    return resp
 
 
 # --- Landing page (HTML) ---
@@ -271,25 +286,16 @@ def test_create_post_too_many_tags(mock_async_client, client):
 
 @patch("agentblog.app.main.httpx.AsyncClient")
 def test_list_posts(mock_async_client, client):
-    mock_async_client.return_value = _mock_registry_success("bot_a")
-    client.post(
-        "/v1/posts",
-        json={"title": "First", "body": "First post", "category": "technology"},
-        headers={"Authorization": "Bearer proof_test123"},
-    )
-
-    mock_async_client.return_value = _mock_registry_success("bot_b")
-    client.post(
-        "/v1/posts",
-        json={"title": "Second", "body": "Second post", "category": "business"},
-        headers={"Authorization": "Bearer proof_test123"},
-    )
+    _create_post(mock_async_client, client, title="First", body="First post", category="technology", agent_name="bot_a")
+    _create_post(mock_async_client, client, title="Second", body="Second post", category="business", agent_name="bot_b")
 
     mock_async_client.return_value = _mock_registry_success()
     resp = client.get("/v1/posts", headers={"Authorization": "Bearer proof_read"})
     assert resp.status_code == 200
     data = resp.json()
     assert data["count"] == 2
+    assert data["total_count"] == 2
+    assert data["page"] == 1
     # Newest first
     assert data["posts"][0]["title"] == "Second"
     assert data["posts"][1]["title"] == "First"
@@ -297,19 +303,8 @@ def test_list_posts(mock_async_client, client):
 
 @patch("agentblog.app.main.httpx.AsyncClient")
 def test_list_posts_filter_by_category(mock_async_client, client):
-    mock_async_client.return_value = _mock_registry_success("bot_a")
-    client.post(
-        "/v1/posts",
-        json={"title": "Tech Post", "body": "About tech", "category": "technology"},
-        headers={"Authorization": "Bearer proof_test123"},
-    )
-
-    mock_async_client.return_value = _mock_registry_success("bot_b")
-    client.post(
-        "/v1/posts",
-        json={"title": "Biz Post", "body": "About business", "category": "business"},
-        headers={"Authorization": "Bearer proof_test123"},
-    )
+    _create_post(mock_async_client, client, title="Tech Post", body="About tech", category="technology", agent_name="bot_a")
+    _create_post(mock_async_client, client, title="Biz Post", body="About business", category="business", agent_name="bot_b")
 
     mock_async_client.return_value = _mock_registry_success()
     resp = client.get("/v1/posts?category=technology", headers={"Authorization": "Bearer proof_read"})
@@ -332,20 +327,8 @@ def test_list_posts_empty(mock_async_client, client):
 
 @patch("agentblog.app.main.httpx.AsyncClient")
 def test_list_agent_posts(mock_async_client, client):
-    # Post from two different agents
-    mock_async_client.return_value = _mock_registry_success("alpha_bot")
-    client.post(
-        "/v1/posts",
-        json={"title": "Alpha Post", "body": "From alpha", "category": "technology"},
-        headers={"Authorization": "Bearer proof_alpha"},
-    )
-
-    mock_async_client.return_value = _mock_registry_success("beta_bot")
-    client.post(
-        "/v1/posts",
-        json={"title": "Beta Post", "body": "From beta", "category": "business"},
-        headers={"Authorization": "Bearer proof_beta"},
-    )
+    _create_post(mock_async_client, client, title="Alpha Post", body="From alpha", category="technology", agent_name="alpha_bot")
+    _create_post(mock_async_client, client, title="Beta Post", body="From beta", category="business", agent_name="beta_bot")
 
     mock_async_client.return_value = _mock_registry_success()
     resp = client.get("/v1/posts/by/alpha_bot", headers={"Authorization": "Bearer proof_read"})
@@ -368,13 +351,8 @@ def test_list_agent_posts_empty(mock_async_client, client):
 
 @patch("agentblog.app.main.httpx.AsyncClient")
 def test_get_post(mock_async_client, client):
-    mock_async_client.return_value = _mock_registry_success()
-
-    client.post(
-        "/v1/posts",
-        json={"title": "Single Post", "body": "Get me by ID", "category": "astrology", "tags": ["stars"]},
-        headers={"Authorization": "Bearer proof_test123"},
-    )
+    _create_post(mock_async_client, client, title="Single Post", body="Get me by ID", category="astrology",
+                 tags=["stars"])
 
     mock_async_client.return_value = _mock_registry_success()
     resp = client.get("/v1/posts/1", headers={"Authorization": "Bearer proof_read"})
@@ -498,3 +476,374 @@ def test_post_rate_limit_different_agents(mock_async_client, client):
         headers={"Authorization": "Bearer proof_b"},
     )
     assert resp2.status_code == 201
+
+
+# ============================================================
+# Phase 1: Tag filtering, pagination, HTML pages
+# ============================================================
+
+
+@patch("agentblog.app.main.httpx.AsyncClient")
+def test_list_posts_filter_by_tag(mock_async_client, client):
+    """Filter posts by tag."""
+    _create_post(mock_async_client, client, title="AI Post", tags=["ai", "ml"], agent_name="bot_a")
+    _create_post(mock_async_client, client, title="Web Post", tags=["web", "frontend"], agent_name="bot_b")
+    _create_post(mock_async_client, client, title="Also AI", tags=["ai"], agent_name="bot_c")
+
+    mock_async_client.return_value = _mock_registry_success()
+    resp = client.get("/v1/posts?tag=ai", headers={"Authorization": "Bearer proof_read"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["count"] == 2
+    titles = {p["title"] for p in data["posts"]}
+    assert titles == {"AI Post", "Also AI"}
+
+
+@patch("agentblog.app.main.httpx.AsyncClient")
+def test_list_posts_filter_by_tag_no_results(mock_async_client, client):
+    """Nonexistent tag returns empty list."""
+    _create_post(mock_async_client, client, title="Post", tags=["ai"])
+
+    mock_async_client.return_value = _mock_registry_success()
+    resp = client.get("/v1/posts?tag=nonexistent", headers={"Authorization": "Bearer proof_read"})
+    assert resp.status_code == 200
+    assert resp.json()["count"] == 0
+
+
+@patch("agentblog.app.main.httpx.AsyncClient")
+def test_list_posts_combined_tag_and_category(mock_async_client, client):
+    """Both tag and category filters at once."""
+    _create_post(mock_async_client, client, title="Tech AI", category="technology", tags=["ai"], agent_name="bot_a")
+    _create_post(mock_async_client, client, title="Biz AI", category="business", tags=["ai"], agent_name="bot_b")
+    _create_post(mock_async_client, client, title="Tech Web", category="technology", tags=["web"], agent_name="bot_c")
+
+    mock_async_client.return_value = _mock_registry_success()
+    resp = client.get("/v1/posts?category=technology&tag=ai", headers={"Authorization": "Bearer proof_read"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["count"] == 1
+    assert data["posts"][0]["title"] == "Tech AI"
+
+
+@patch("agentblog.app.main.httpx.AsyncClient")
+def test_list_tags(mock_async_client, client):
+    """Verify aggregated unique tag list."""
+    _create_post(mock_async_client, client, title="P1", tags=["ai", "ml"], agent_name="bot_a")
+    _create_post(mock_async_client, client, title="P2", tags=["ai", "web"], agent_name="bot_b")
+
+    mock_async_client.return_value = _mock_registry_success()
+    resp = client.get("/v1/tags", headers={"Authorization": "Bearer proof_read"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert set(data["tags"]) == {"ai", "ml", "web"}
+    assert data["count"] == 3
+
+
+@patch("agentblog.app.main.httpx.AsyncClient")
+def test_list_tags_empty(mock_async_client, client):
+    """No posts, empty tags."""
+    mock_async_client.return_value = _mock_registry_success()
+    resp = client.get("/v1/tags", headers={"Authorization": "Bearer proof_read"})
+    assert resp.status_code == 200
+    assert resp.json()["tags"] == []
+    assert resp.json()["count"] == 0
+
+
+@patch("agentblog.app.main.httpx.AsyncClient")
+def test_list_posts_pagination(mock_async_client, client):
+    """Create >20 posts, verify page 1 and page 2."""
+    for i in range(25):
+        _create_post(mock_async_client, client, title=f"Post {i}", agent_name=f"bot_{i}")
+
+    mock_async_client.return_value = _mock_registry_success()
+    # Page 1
+    resp1 = client.get("/v1/posts?page=1&limit=20", headers={"Authorization": "Bearer proof_read"})
+    data1 = resp1.json()
+    assert data1["count"] == 20
+    assert data1["total_count"] == 25
+    assert data1["page"] == 1
+
+    # Page 2
+    resp2 = client.get("/v1/posts?page=2&limit=20", headers={"Authorization": "Bearer proof_read"})
+    data2 = resp2.json()
+    assert data2["count"] == 5
+    assert data2["total_count"] == 25
+    assert data2["page"] == 2
+
+
+@patch("agentblog.app.main.httpx.AsyncClient")
+def test_category_html_page(mock_async_client, client):
+    """GET /technology returns HTML with correct posts."""
+    _create_post(mock_async_client, client, title="Tech Article", category="technology")
+    _create_post(mock_async_client, client, title="Biz Article", category="business", agent_name="bot_b")
+
+    resp = client.get("/technology")
+    assert resp.status_code == 200
+    assert "text/html" in resp.headers["content-type"]
+    assert "Tech Article" in resp.text
+    assert "Biz Article" not in resp.text
+
+
+def test_category_html_page_not_found(client):
+    """Invalid category returns 404."""
+    resp = client.get("/sports")
+    assert resp.status_code == 404
+
+
+@patch("agentblog.app.main.httpx.AsyncClient")
+def test_agent_html_page(mock_async_client, client):
+    """GET /agent/test_bot returns HTML."""
+    _create_post(mock_async_client, client, title="My Post")
+
+    resp = client.get("/agent/test_bot")
+    assert resp.status_code == 200
+    assert "text/html" in resp.headers["content-type"]
+    assert "My Post" in resp.text
+    assert "test_bot" in resp.text
+
+
+@patch("agentblog.app.main.httpx.AsyncClient")
+def test_tag_html_page(mock_async_client, client):
+    """GET /tag/ai returns HTML."""
+    _create_post(mock_async_client, client, title="AI Post", tags=["ai", "ml"])
+
+    resp = client.get("/tag/ai")
+    assert resp.status_code == 200
+    assert "text/html" in resp.headers["content-type"]
+    assert "AI Post" in resp.text
+
+
+# ============================================================
+# Phase 2: Edit & Delete by Agent
+# ============================================================
+
+
+@patch("agentblog.app.main.httpx.AsyncClient")
+def test_edit_own_post(mock_async_client, client):
+    """Edit as posting agent, verify changes."""
+    _create_post(mock_async_client, client, title="Original", body="Original body")
+
+    mock_async_client.return_value = _mock_registry_success()
+    resp = client.put(
+        "/v1/posts/1",
+        json={"title": "Updated Title", "body": "Updated body"},
+        headers={"Authorization": "Bearer proof_test123"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["title"] == "Updated Title"
+    assert data["body"] == "Updated body"
+    assert data["updated_at"] is not None
+
+
+@patch("agentblog.app.main.httpx.AsyncClient")
+def test_edit_other_agents_post_forbidden(mock_async_client, client):
+    """403 when trying to edit another agent's post."""
+    _create_post(mock_async_client, client, title="Owner Post", agent_name="owner_bot")
+
+    mock_async_client.return_value = _mock_registry_success("other_bot")
+    resp = client.put(
+        "/v1/posts/1",
+        json={"title": "Hacked"},
+        headers={"Authorization": "Bearer proof_test123"},
+    )
+    assert resp.status_code == 403
+
+
+@patch("agentblog.app.main.httpx.AsyncClient")
+def test_edit_post_not_found(mock_async_client, client):
+    """404 when post doesn't exist."""
+    mock_async_client.return_value = _mock_registry_success()
+    resp = client.put(
+        "/v1/posts/999",
+        json={"title": "Ghost"},
+        headers={"Authorization": "Bearer proof_test123"},
+    )
+    assert resp.status_code == 404
+
+
+@patch("agentblog.app.main.httpx.AsyncClient")
+def test_edit_post_partial_update(mock_async_client, client):
+    """Only update title, body stays."""
+    _create_post(mock_async_client, client, title="Original Title", body="Keep this body")
+
+    mock_async_client.return_value = _mock_registry_success()
+    resp = client.put(
+        "/v1/posts/1",
+        json={"title": "New Title"},
+        headers={"Authorization": "Bearer proof_test123"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["title"] == "New Title"
+    assert data["body"] == "Keep this body"
+
+
+@patch("agentblog.app.main.httpx.AsyncClient")
+def test_delete_own_post(mock_async_client, client):
+    """204, post gone."""
+    _create_post(mock_async_client, client, title="Delete Me")
+
+    mock_async_client.return_value = _mock_registry_success()
+    resp = client.delete("/v1/posts/1", headers={"Authorization": "Bearer proof_test123"})
+    assert resp.status_code == 204
+
+    # Verify post is gone
+    mock_async_client.return_value = _mock_registry_success()
+    resp = client.get("/v1/posts/1", headers={"Authorization": "Bearer proof_read"})
+    assert resp.status_code == 404
+
+
+@patch("agentblog.app.main.httpx.AsyncClient")
+def test_delete_other_agents_post_forbidden(mock_async_client, client):
+    """403 when trying to delete another agent's post."""
+    _create_post(mock_async_client, client, title="Owner Post", agent_name="owner_bot")
+
+    mock_async_client.return_value = _mock_registry_success("other_bot")
+    resp = client.delete("/v1/posts/1", headers={"Authorization": "Bearer proof_test123"})
+    assert resp.status_code == 403
+
+
+@patch("agentblog.app.main.httpx.AsyncClient")
+def test_delete_post_not_found(mock_async_client, client):
+    """404 when post doesn't exist."""
+    mock_async_client.return_value = _mock_registry_success()
+    resp = client.delete("/v1/posts/999", headers={"Authorization": "Bearer proof_test123"})
+    assert resp.status_code == 404
+
+
+# ============================================================
+# Phase 3: Comments
+# ============================================================
+
+
+@patch("agentblog.app.main.httpx.AsyncClient")
+def test_create_comment(mock_async_client, client):
+    """Comment on a post."""
+    _create_post(mock_async_client, client, title="Post to comment on")
+
+    mock_async_client.return_value = _mock_registry_success("commenter_bot", "I comment")
+    resp = client.post(
+        "/v1/posts/1/comments",
+        json={"body": "Great post!"},
+        headers={"Authorization": "Bearer proof_test123"},
+    )
+    assert resp.status_code == 201
+    data = resp.json()
+    assert data["body"] == "Great post!"
+    assert data["agent_name"] == "commenter_bot"
+    assert data["post_id"] == 1
+
+
+@patch("agentblog.app.main.httpx.AsyncClient")
+def test_create_comment_nonexistent_post(mock_async_client, client):
+    """404 when post doesn't exist."""
+    mock_async_client.return_value = _mock_registry_success()
+    resp = client.post(
+        "/v1/posts/999/comments",
+        json={"body": "Hello?"},
+        headers={"Authorization": "Bearer proof_test123"},
+    )
+    assert resp.status_code == 404
+
+
+@patch("agentblog.app.main.httpx.AsyncClient")
+def test_list_comments(mock_async_client, client):
+    """Multiple comments, verify order."""
+    _create_post(mock_async_client, client, title="Post")
+
+    mock_async_client.return_value = _mock_registry_success("bot_a")
+    client.post("/v1/posts/1/comments", json={"body": "First comment"},
+                headers={"Authorization": "Bearer proof_a"})
+    main.agent_comment_limiter.reset("bot_a")
+
+    mock_async_client.return_value = _mock_registry_success("bot_b")
+    client.post("/v1/posts/1/comments", json={"body": "Second comment"},
+                headers={"Authorization": "Bearer proof_b"})
+
+    mock_async_client.return_value = _mock_registry_success()
+    resp = client.get("/v1/posts/1/comments", headers={"Authorization": "Bearer proof_read"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["count"] == 2
+    # Oldest first
+    assert data["comments"][0]["body"] == "First comment"
+    assert data["comments"][1]["body"] == "Second comment"
+
+
+@patch("agentblog.app.main.httpx.AsyncClient")
+def test_delete_own_comment(mock_async_client, client):
+    """Delete own comment, verify gone."""
+    _create_post(mock_async_client, client, title="Post")
+
+    mock_async_client.return_value = _mock_registry_success("commenter")
+    client.post("/v1/posts/1/comments", json={"body": "To delete"},
+                headers={"Authorization": "Bearer proof_c"})
+
+    mock_async_client.return_value = _mock_registry_success("commenter")
+    resp = client.delete("/v1/posts/1/comments/1", headers={"Authorization": "Bearer proof_c"})
+    assert resp.status_code == 204
+
+    # Verify gone
+    mock_async_client.return_value = _mock_registry_success()
+    resp = client.get("/v1/posts/1/comments", headers={"Authorization": "Bearer proof_read"})
+    assert resp.json()["count"] == 0
+
+
+@patch("agentblog.app.main.httpx.AsyncClient")
+def test_delete_other_agents_comment_forbidden(mock_async_client, client):
+    """403 when trying to delete another agent's comment."""
+    _create_post(mock_async_client, client, title="Post")
+
+    mock_async_client.return_value = _mock_registry_success("author_bot")
+    client.post("/v1/posts/1/comments", json={"body": "My comment"},
+                headers={"Authorization": "Bearer proof_a"})
+
+    mock_async_client.return_value = _mock_registry_success("other_bot")
+    resp = client.delete("/v1/posts/1/comments/1", headers={"Authorization": "Bearer proof_b"})
+    assert resp.status_code == 403
+
+
+@patch("agentblog.app.main.httpx.AsyncClient")
+def test_comment_body_too_long(mock_async_client, client):
+    """422 when comment body exceeds max length."""
+    _create_post(mock_async_client, client, title="Post")
+
+    mock_async_client.return_value = _mock_registry_success()
+    resp = client.post(
+        "/v1/posts/1/comments",
+        json={"body": "x" * 2001},
+        headers={"Authorization": "Bearer proof_test123"},
+    )
+    assert resp.status_code == 422
+
+
+@patch("agentblog.app.main.httpx.AsyncClient")
+def test_comment_rate_limit(mock_async_client, client):
+    """Verify comment cooldown."""
+    _create_post(mock_async_client, client, title="Post")
+
+    mock_async_client.return_value = _mock_registry_success("commenter")
+    resp1 = client.post("/v1/posts/1/comments", json={"body": "First"},
+                        headers={"Authorization": "Bearer proof_c"})
+    assert resp1.status_code == 201
+
+    # Second comment should be rate limited
+    resp2 = client.post("/v1/posts/1/comments", json={"body": "Second"},
+                        headers={"Authorization": "Bearer proof_c"})
+    assert resp2.status_code == 429
+
+
+@patch("agentblog.app.main.httpx.AsyncClient")
+def test_comments_count_in_post_response(mock_async_client, client):
+    """Verify comments_count in post detail."""
+    _create_post(mock_async_client, client, title="Post")
+
+    mock_async_client.return_value = _mock_registry_success("commenter")
+    client.post("/v1/posts/1/comments", json={"body": "Comment 1"},
+                headers={"Authorization": "Bearer proof_c"})
+
+    mock_async_client.return_value = _mock_registry_success()
+    resp = client.get("/v1/posts/1", headers={"Authorization": "Bearer proof_read"})
+    assert resp.status_code == 200
+    assert resp.json()["comments_count"] == 1

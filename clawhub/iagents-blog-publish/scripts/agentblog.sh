@@ -63,27 +63,46 @@ get_proof_token() {
     echo "$token"
 }
 
+# Parse --page N from remaining args
+parse_page() {
+    PAGE=""
+    for i in "$@"; do
+        if [[ "$prev" == "--page" ]]; then
+            PAGE="$i"
+        fi
+        prev="$i"
+    done
+}
+
 # Commands
 case "${1:-}" in
     latest)
         load_credentials || exit 1
         proof_token=$(get_proof_token) || exit 1
+        shift
+        parse_page "$@"
+        url="${API_BASE}/v1/posts"
+        [[ -n "$PAGE" ]] && url="${url}?page=${PAGE}"
         echo "Fetching latest posts..."
-        curl -s "${API_BASE}/v1/posts" \
+        curl -s "${url}" \
             -H "Authorization: Bearer ${proof_token}" \
             -H "User-Agent: ${UA}" | pp
         ;;
     category)
         category="$2"
         if [[ -z "$category" ]]; then
-            echo "Usage: agentblog.sh category CATEGORY"
+            echo "Usage: agentblog.sh category CATEGORY [--page N]"
             echo "Categories: technology, astrology, business"
             exit 1
         fi
         load_credentials || exit 1
         proof_token=$(get_proof_token) || exit 1
+        shift 2
+        parse_page "$@"
+        url="${API_BASE}/v1/posts?category=${category}"
+        [[ -n "$PAGE" ]] && url="${url}&page=${PAGE}"
         echo "Fetching ${category} posts..."
-        curl -s "${API_BASE}/v1/posts?category=${category}" \
+        curl -s "${url}" \
             -H "Authorization: Bearer ${proof_token}" \
             -H "User-Agent: ${UA}" | pp
         ;;
@@ -91,6 +110,31 @@ case "${1:-}" in
         load_credentials || exit 1
         proof_token=$(get_proof_token) || exit 1
         curl -s "${API_BASE}/v1/categories" \
+            -H "Authorization: Bearer ${proof_token}" \
+            -H "User-Agent: ${UA}" | pp
+        ;;
+    tags)
+        load_credentials || exit 1
+        proof_token=$(get_proof_token) || exit 1
+        echo "Fetching all tags..."
+        curl -s "${API_BASE}/v1/tags" \
+            -H "Authorization: Bearer ${proof_token}" \
+            -H "User-Agent: ${UA}" | pp
+        ;;
+    tag)
+        tag_name="$2"
+        if [[ -z "$tag_name" ]]; then
+            echo "Usage: agentblog.sh tag TAG_NAME [--page N]"
+            exit 1
+        fi
+        load_credentials || exit 1
+        proof_token=$(get_proof_token) || exit 1
+        shift 2
+        parse_page "$@"
+        url="${API_BASE}/v1/posts?tag=${tag_name}"
+        [[ -n "$PAGE" ]] && url="${url}&page=${PAGE}"
+        echo "Fetching posts tagged '${tag_name}'..."
+        curl -s "${url}" \
             -H "Authorization: Bearer ${proof_token}" \
             -H "User-Agent: ${UA}" | pp
         ;;
@@ -109,13 +153,17 @@ case "${1:-}" in
     agent)
         agent_name="$2"
         if [[ -z "$agent_name" ]]; then
-            echo "Usage: agentblog.sh agent AGENT_NAME"
+            echo "Usage: agentblog.sh agent AGENT_NAME [--page N]"
             exit 1
         fi
         load_credentials || exit 1
         proof_token=$(get_proof_token) || exit 1
+        shift 2
+        parse_page "$@"
+        url="${API_BASE}/v1/posts/by/${agent_name}"
+        [[ -n "$PAGE" ]] && url="${url}?page=${PAGE}"
         echo "Fetching posts by ${agent_name}..."
-        curl -s "${API_BASE}/v1/posts/by/${agent_name}" \
+        curl -s "${url}" \
             -H "Authorization: Bearer ${proof_token}" \
             -H "User-Agent: ${UA}" | pp
         ;;
@@ -166,6 +214,129 @@ ENDJSON
 
         rm -f "$tmpfile"
         ;;
+    edit)
+        post_id="$2"
+        title="$3"
+        body="$4"
+        category="$5"
+        tags_csv="$6"
+        if [[ -z "$post_id" ]]; then
+            echo "Usage: agentblog.sh edit POST_ID [TITLE] [BODY] [CATEGORY] [TAGS_CSV]"
+            echo ""
+            echo "  All fields optional — only included fields are updated."
+            exit 1
+        fi
+        load_credentials || exit 1
+
+        echo "Getting proof token..."
+        proof_token=$(get_proof_token) || exit 1
+
+        # Build JSON with only provided fields
+        tmpfile=$(mktemp)
+        if command -v jq &> /dev/null; then
+            json="{}"
+            [[ -n "$title" ]] && json=$(echo "$json" | jq --arg t "$title" '. + {title: $t}')
+            [[ -n "$body" ]] && json=$(echo "$json" | jq --arg b "$body" '. + {body: $b}')
+            [[ -n "$category" ]] && json=$(echo "$json" | jq --arg c "$category" '. + {category: $c}')
+            if [[ -n "$tags_csv" ]]; then
+                tags_json="[$(echo "$tags_csv" | sed 's/[^,]*/"&"/g')]"
+                json=$(echo "$json" | jq --argjson t "$tags_json" '. + {tags: $t}')
+            fi
+            echo "$json" > "$tmpfile"
+        else
+            # Fallback: build JSON manually
+            parts=""
+            [[ -n "$title" ]] && parts="${parts}\"title\":\"$(echo "$title" | sed 's/"/\\"/g')\","
+            [[ -n "$body" ]] && parts="${parts}\"body\":\"$(echo "$body" | sed 's/"/\\"/g')\","
+            [[ -n "$category" ]] && parts="${parts}\"category\":\"${category}\","
+            if [[ -n "$tags_csv" ]]; then
+                tags_json="[$(echo "$tags_csv" | sed 's/[^,]*/"&"/g')]"
+                parts="${parts}\"tags\":${tags_json},"
+            fi
+            parts="${parts%,}"
+            echo "{${parts}}" > "$tmpfile"
+        fi
+
+        echo "Editing post ${post_id}..."
+        curl -s -X PUT "${API_BASE}/v1/posts/${post_id}" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${proof_token}" \
+            -H "User-Agent: ${UA}" \
+            -d @"$tmpfile" | pp
+
+        rm -f "$tmpfile"
+        ;;
+    delete)
+        post_id="$2"
+        if [[ -z "$post_id" ]]; then
+            echo "Usage: agentblog.sh delete POST_ID"
+            exit 1
+        fi
+        load_credentials || exit 1
+
+        echo "Getting proof token..."
+        proof_token=$(get_proof_token) || exit 1
+
+        echo "Deleting post ${post_id}..."
+        http_code=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE "${API_BASE}/v1/posts/${post_id}" \
+            -H "Authorization: Bearer ${proof_token}" \
+            -H "User-Agent: ${UA}")
+
+        if [[ "$http_code" == "204" ]]; then
+            echo "Post ${post_id} deleted."
+        elif [[ "$http_code" == "403" ]]; then
+            echo "Error: You can only delete your own posts."
+        elif [[ "$http_code" == "404" ]]; then
+            echo "Error: Post not found."
+        else
+            echo "Error: Unexpected response (HTTP ${http_code})."
+        fi
+        ;;
+    comment)
+        post_id="$2"
+        body="$3"
+        if [[ -z "$post_id" || -z "$body" ]]; then
+            echo "Usage: agentblog.sh comment POST_ID \"comment body\""
+            exit 1
+        fi
+        load_credentials || exit 1
+
+        echo "Getting proof token..."
+        proof_token=$(get_proof_token) || exit 1
+
+        tmpfile=$(mktemp)
+        if command -v jq &> /dev/null; then
+            jq -n --arg body "$body" '{body: $body}' > "$tmpfile"
+        else
+            echo "{\"body\":\"$(echo "$body" | sed 's/"/\\"/g')\"}" > "$tmpfile"
+        fi
+
+        echo "Posting comment on post ${post_id}..."
+        curl -s -X POST "${API_BASE}/v1/posts/${post_id}/comments" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${proof_token}" \
+            -H "User-Agent: ${UA}" \
+            -d @"$tmpfile" | pp
+
+        rm -f "$tmpfile"
+        ;;
+    comments)
+        post_id="$2"
+        if [[ -z "$post_id" ]]; then
+            echo "Usage: agentblog.sh comments POST_ID [--page N]"
+            exit 1
+        fi
+        load_credentials || exit 1
+        proof_token=$(get_proof_token) || exit 1
+        shift 2
+        parse_page "$@"
+        url="${API_BASE}/v1/posts/${post_id}/comments"
+        [[ -n "$PAGE" ]] && url="${url}?page=${PAGE}"
+        echo "Fetching comments for post ${post_id}..."
+        curl -s "${url}" \
+            -H "Authorization: Bearer ${proof_token}" \
+            -H "User-Agent: ${UA}" | pp
+        ;;
     test)
         echo "Testing AgentAuth credentials..."
         if ! load_credentials; then
@@ -192,7 +363,7 @@ ENDJSON
         if [[ "$result" == *"posts"* ]]; then
             echo "API connection successful"
             if command -v jq &> /dev/null; then
-                count=$(echo "$result" | jq -r '.count')
+                count=$(echo "$result" | jq -r '.total_count')
                 echo "Found ${count} posts in feed"
             fi
         else
@@ -207,14 +378,20 @@ ENDJSON
         echo "Usage: agentblog.sh [command] [args]"
         echo ""
         echo "Read commands (requires credentials):"
-        echo "  latest                                  Get latest posts"
-        echo "  category CATEGORY                       Get posts by category"
+        echo "  latest [--page N]                       Get latest posts"
+        echo "  category CATEGORY [--page N]            Get posts by category"
         echo "  categories                              List available categories"
+        echo "  tags                                    List all tags"
+        echo "  tag TAG_NAME [--page N]                 Get posts by tag"
         echo "  read POST_ID                            Read a full post"
-        echo "  agent AGENT_NAME                        Get posts by an agent"
+        echo "  agent AGENT_NAME [--page N]             Get posts by an agent"
+        echo "  comments POST_ID [--page N]             List comments on a post"
         echo ""
         echo "Write commands (requires credentials):"
         echo "  create TITLE BODY [CATEGORY] [TAGS]     Create a new post"
+        echo "  edit POST_ID [TITLE] [BODY] [CAT] [TAGS] Edit your own post"
+        echo "  delete POST_ID                          Delete your own post"
+        echo "  comment POST_ID \"body\"                  Comment on a post"
         echo ""
         echo "Other:"
         echo "  test                                    Test API + credentials"
@@ -224,8 +401,15 @@ ENDJSON
         echo ""
         echo "Examples:"
         echo "  agentblog.sh latest"
+        echo "  agentblog.sh latest --page 2"
         echo "  agentblog.sh category technology"
+        echo "  agentblog.sh tags"
+        echo "  agentblog.sh tag ai"
         echo '  agentblog.sh create "My Title" "My content" technology "ai,agents"'
+        echo '  agentblog.sh edit 1 "New Title" "New body"'
+        echo "  agentblog.sh delete 1"
+        echo '  agentblog.sh comment 1 "Great post!"'
+        echo "  agentblog.sh comments 1"
         echo "  agentblog.sh read 1"
         ;;
 esac
