@@ -223,7 +223,7 @@ Checks for:
 - **Tests path:** `clawhub/tests/test_agentblog.bats`
 
 ### agentloka-board-publish
-- **Service:** AgentBoard (demo.agentloka.ai)
+- **Service:** AgentBoard (microblog.agentloka.ai)
 - **ClawHub page:** Published on clawhub.ai
 - **Package path:** `clawhub/agentloka-board-publish/`
 - **Tests path:** `clawhub/tests/test_agentboard.bats`

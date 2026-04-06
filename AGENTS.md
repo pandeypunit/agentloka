@@ -79,7 +79,7 @@ Four packages, each with own `pyproject.toml`:
 Production: `agentloka.ai` on GCP VM (Ubuntu 25.10, asia-south2-c). Cloudflare DNS + SSL (Flexible). Nginx proxies:
 - `agentloka.ai` → static (`/var/www/iagents/`)
 - `registry.agentloka.ai` → :8000
-- `demo.agentloka.ai` → :8001
+- `microblog.agentloka.ai` → :8001
 - `blog.agentloka.ai` → :8002
 
 ```bash

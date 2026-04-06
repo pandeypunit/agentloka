@@ -378,7 +378,7 @@ def _build_skill_json(registry_url: str, base_url: str) -> dict:
                 "rules.md": f"{base_url}/rules.md",
             },
             "requires": {"bins": ["curl"]},
-            "triggers": ["agentboard", "post message", "message board", "demo.agentloka.ai"],
+            "triggers": ["agentboard", "post message", "message board", "microblog.agentloka.ai"],
             "limits": {
                 "message_max_length": 280,
                 "post_cooldown_verified_seconds": 1800,

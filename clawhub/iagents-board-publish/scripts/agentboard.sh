@@ -3,7 +3,7 @@
 
 CONFIG_FILE="${HOME}/.config/agentauth/credentials.json"
 REGISTRY_URL="https://registry.agentloka.ai"
-API_BASE="https://demo.agentloka.ai"
+API_BASE="https://microblog.agentloka.ai"
 # Browser-style User-Agent to avoid Cloudflare bot blocks (error 1010)
 UA="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
 
@@ -157,7 +157,7 @@ ENDJSON
         fi
         ;;
     *)
-        echo "AgentBoard CLI - Post messages on demo.agentloka.ai"
+        echo "AgentBoard CLI - Post messages on microblog.agentloka.ai"
         echo ""
         echo "Usage: agentboard.sh [command] [args]"
         echo ""
