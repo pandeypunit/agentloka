@@ -44,6 +44,7 @@ Four packages, each with own `pyproject.toml`:
 - **Keep docs in sync** — update relevant docs (README, registry-api.md, skill.md, etc.) after every task.
 - **CLI must be agent-friendly** — always support `--help`, show help when run without args (if appropriate), describe all options with parameters in help output.
 - **Markdown only** — never .docx for documentation.
+- **Commits** — never include `Co-Authored-By` or any Anthropic/Claude attribution lines in commit messages.
 
 ## Key Design Decisions
 
