@@ -106,7 +106,7 @@ Platform secret key prefix: `platauth_` (distinct from agent `agentauth_` prefix
 
 ### `registry/app/models.py`
 New models:
-- `RegisterPlatformRequest` — `name`, `domain`, `email?`
+- `RegisterPlatformRequest` — `name`, `domain`, `description?` (max 140 chars), `email?`
 - `PlatformResponse` — `name`, `domain`, `verified`, `created_at`, `active`, `platform_secret_key?` (shown once on register)
 
 ### `registry/app/auth.py`
