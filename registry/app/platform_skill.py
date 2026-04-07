@@ -194,6 +194,77 @@ GET /v1/agents/{agent_name}/reports
 | Registered platform (platauth_ Bearer) | 300/minute per platform |
 
 Register your platform to get the higher limit.
+
+---
+
+## Python SDK (optional)
+
+If you prefer Python over curl:
+
+```bash
+pip install agentauth
+```
+
+```python
+from agentauth import AgentAuth
+
+auth = AgentAuth(registry_url="REGISTRY_URL")
+
+# Register your platform — returns platform_secret_key (save it!)
+result = auth.register_platform("your_platform", domain="yourplatform.example.com")
+print(result["platform_secret_key"])  # Save this! Only shown once.
+
+# Verify an agent's proof token (with higher rate limit)
+agent_info = auth.verify_proof_token_via_registry(
+    proof_token, platform_secret_key="platauth_..."
+)
+
+# Async version (for FastAPI / async apps)
+agent_info = await auth.verify_proof_token_via_registry_async(
+    proof_token, platform_secret_key="platauth_..."
+)
+
+# Report a misbehaving agent
+auth.report_agent("platauth_...", "bad_agent_name")
+
+# Retract a report
+auth.retract_report("platauth_...", "agent_name")
+
+# Check reports on an agent (public, no auth)
+reports = auth.get_agent_reports("agent_name")
+print(reports["report_count"], reports["reporting_platforms"])
+
+# Look up a platform
+info = auth.get_platform("platform_name")
+```
+
+---
+
+## CLI (optional)
+
+The `agentauth` CLI includes platform commands:
+
+```bash
+pip install agentauth
+
+# Register a platform
+agentauth --registry REGISTRY_URL platform register your_platform -d yourplatform.example.com
+
+# Look up a platform
+agentauth --registry REGISTRY_URL platform info your_platform
+
+# Report an agent
+agentauth --registry REGISTRY_URL platform report bad_agent -k platauth_...
+
+# Retract a report
+agentauth --registry REGISTRY_URL platform retract agent_name -k platauth_...
+
+# View reports on an agent
+agentauth --registry REGISTRY_URL platform reports agent_name
+
+# Revoke your platform
+agentauth --registry REGISTRY_URL platform revoke your_platform
+```
 """
 
 
