@@ -3,7 +3,7 @@
 import json
 import time
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import jwt
 import pytest
@@ -412,7 +412,9 @@ def test_verify_proof_token_via_registry(mock_get, auth):
 
     result = auth.verify_proof_token_via_registry("eyJhbGci_token123")
     assert result["name"] == "test_bot"
-    mock_get.assert_called_once_with("http://test:8000/v1/verify-proof/eyJhbGci_token123")
+    mock_get.assert_called_once_with(
+        "http://test:8000/v1/verify-proof/eyJhbGci_token123", headers={}
+    )
 
 
 @patch("agentauth.client.httpx.get")
@@ -422,3 +424,207 @@ def test_verify_proof_token_via_registry_invalid(mock_get, auth):
     mock_get.return_value = mock_resp
 
     assert auth.verify_proof_token_via_registry("bad_token") is None
+
+
+@patch("agentauth.client.httpx.get")
+def test_verify_proof_token_via_registry_with_platform_key(mock_get, auth):
+    """Sync verify sends platform_secret_key as Bearer auth for higher rate limit."""
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"name": "test_bot", "active": True}
+    mock_get.return_value = mock_resp
+
+    result = auth.verify_proof_token_via_registry(
+        "eyJhbGci_token123", platform_secret_key="platauth_abc123"
+    )
+    assert result["name"] == "test_bot"
+    mock_get.assert_called_once_with(
+        "http://test:8000/v1/verify-proof/eyJhbGci_token123",
+        headers={"Authorization": "Bearer platauth_abc123"},
+    )
+
+
+# --- Async verify via registry ---
+
+
+@pytest.mark.asyncio
+async def test_verify_proof_token_via_registry_async(auth):
+    """Async verify — valid token returns dict."""
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "name": "test_bot",
+        "description": "A bot",
+        "verified": False,
+        "active": True,
+    }
+
+    with patch("agentauth.client.httpx.AsyncClient") as MockAsyncClient:
+        mock_client = AsyncMock()
+        mock_client.get.return_value = mock_resp
+        mock_client.__aenter__.return_value = mock_client
+        MockAsyncClient.return_value = mock_client
+
+        result = await auth.verify_proof_token_via_registry_async("eyJhbGci_token123")
+        assert result["name"] == "test_bot"
+        mock_client.get.assert_called_once_with(
+            "http://test:8000/v1/verify-proof/eyJhbGci_token123", headers={}
+        )
+
+
+@pytest.mark.asyncio
+async def test_verify_proof_token_via_registry_async_invalid(auth):
+    """Async verify — invalid token returns None."""
+    mock_resp = MagicMock()
+    mock_resp.status_code = 401
+
+    with patch("agentauth.client.httpx.AsyncClient") as MockAsyncClient:
+        mock_client = AsyncMock()
+        mock_client.get.return_value = mock_resp
+        mock_client.__aenter__.return_value = mock_client
+        MockAsyncClient.return_value = mock_client
+
+        assert await auth.verify_proof_token_via_registry_async("bad_token") is None
+
+
+@pytest.mark.asyncio
+async def test_verify_proof_token_via_registry_async_with_platform_key(auth):
+    """Async verify sends platform_secret_key as Bearer auth for higher rate limit."""
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"name": "test_bot", "active": True}
+
+    with patch("agentauth.client.httpx.AsyncClient") as MockAsyncClient:
+        mock_client = AsyncMock()
+        mock_client.get.return_value = mock_resp
+        mock_client.__aenter__.return_value = mock_client
+        MockAsyncClient.return_value = mock_client
+
+        result = await auth.verify_proof_token_via_registry_async(
+            "eyJhbGci_token123", platform_secret_key="platauth_abc123"
+        )
+        assert result["name"] == "test_bot"
+        mock_client.get.assert_called_once_with(
+            "http://test:8000/v1/verify-proof/eyJhbGci_token123",
+            headers={"Authorization": "Bearer platauth_abc123"},
+        )
+
+
+# --- Platform registration SDK ---
+
+
+@patch("agentauth.client.httpx.post")
+def test_register_platform(mock_post, auth, tmp_config):
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = {
+        "name": "test_plat",
+        "domain": "test.example.com",
+        "platform_secret_key": "platauth_abc123",
+        "active": True,
+    }
+    mock_resp.raise_for_status = MagicMock()
+    mock_post.return_value = mock_resp
+
+    result = auth.register_platform("test_plat", domain="test.example.com")
+
+    assert result["platform_secret_key"] == "platauth_abc123"
+    mock_post.assert_called_once_with(
+        "http://test:8000/v1/platforms/register",
+        json={"name": "test_plat", "domain": "test.example.com"},
+    )
+
+    # Credentials saved
+    creds_file = tmp_config / "platforms" / "test_plat.json"
+    assert creds_file.exists()
+    saved = json.loads(creds_file.read_text())
+    assert saved["platform_secret_key"] == "platauth_abc123"
+    assert oct(creds_file.stat().st_mode)[-3:] == "600"
+
+
+@patch("agentauth.client.httpx.get")
+def test_get_platform(mock_get, auth):
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = {"name": "test_plat", "domain": "test.example.com", "active": True}
+    mock_resp.raise_for_status = MagicMock()
+    mock_get.return_value = mock_resp
+
+    result = auth.get_platform("test_plat")
+    assert result["name"] == "test_plat"
+    mock_get.assert_called_once_with("http://test:8000/v1/platforms/test_plat")
+
+
+@patch("agentauth.client.httpx.delete")
+def test_revoke_platform(mock_delete, auth, tmp_config):
+    plat_dir = tmp_config / "platforms"
+    plat_dir.mkdir(parents=True)
+    creds_file = plat_dir / "test_plat.json"
+    creds_file.write_text(json.dumps({"name": "test_plat", "platform_secret_key": "platauth_key1"}))
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.raise_for_status = MagicMock()
+    mock_delete.return_value = mock_resp
+
+    assert auth.revoke_platform("test_plat") is True
+    assert not creds_file.exists()
+
+
+# --- Agent reporting SDK ---
+
+
+@patch("agentauth.client.httpx.post")
+def test_report_agent(mock_post, auth):
+    mock_resp = MagicMock()
+    mock_resp.status_code = 201
+    mock_resp.raise_for_status = MagicMock()
+    mock_post.return_value = mock_resp
+
+    assert auth.report_agent("platauth_key1", "bad_bot") is True
+    mock_post.assert_called_once_with(
+        "http://test:8000/v1/agents/bad_bot/reports",
+        headers={"Authorization": "Bearer platauth_key1"},
+    )
+
+
+@patch("agentauth.client.httpx.post")
+def test_report_agent_duplicate(mock_post, auth):
+    mock_resp = MagicMock()
+    mock_resp.status_code = 409
+    mock_post.return_value = mock_resp
+
+    assert auth.report_agent("platauth_key1", "bad_bot") is False
+
+
+@patch("agentauth.client.httpx.delete")
+def test_retract_report(mock_delete, auth):
+    mock_resp = MagicMock()
+    mock_resp.status_code = 204
+    mock_resp.raise_for_status = MagicMock()
+    mock_delete.return_value = mock_resp
+
+    assert auth.retract_report("platauth_key1", "bad_bot") is True
+
+
+@patch("agentauth.client.httpx.delete")
+def test_retract_report_not_found(mock_delete, auth):
+    mock_resp = MagicMock()
+    mock_resp.status_code = 404
+    mock_delete.return_value = mock_resp
+
+    assert auth.retract_report("platauth_key1", "good_bot") is False
+
+
+@patch("agentauth.client.httpx.get")
+def test_get_agent_reports(mock_get, auth):
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = {
+        "agent_name": "bad_bot",
+        "report_count": 2,
+        "reporting_platforms": ["plat_a", "plat_b"],
+    }
+    mock_resp.raise_for_status = MagicMock()
+    mock_get.return_value = mock_resp
+
+    result = auth.get_agent_reports("bad_bot")
+    assert result["report_count"] == 2
+    mock_get.assert_called_once_with("http://test:8000/v1/agents/bad_bot/reports")

@@ -33,6 +33,31 @@ async def get_authenticated_agent(request: Request) -> str:
     return agent.name
 
 
+async def get_authenticated_platform(request: Request) -> str:
+    """Extract and validate Bearer token for platforms. Returns platform name.
+
+    Expects: Authorization: Bearer platauth_xxxxx
+    """
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        raise HTTPException(
+            status_code=401,
+            detail="Missing or invalid Authorization header. Expected: Bearer platauth_xxxxx",
+        )
+
+    secret_key = auth_header[7:]  # Strip "Bearer "
+    platform = registry_store.get_platform_by_key(secret_key)
+    if not platform:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid platform_secret_key. Ensure you are sending your platform_secret_key "
+            "(starts with 'platauth_'). "
+            "If you lost your key, it cannot be recovered — register a new platform.",
+        )
+
+    return platform.name
+
+
 async def get_authenticated_admin(request: Request):
     """Validate admin bearer token against AGENTAUTH_ADMIN_TOKEN env var."""
     admin_token = os.environ.get("AGENTAUTH_ADMIN_TOKEN")

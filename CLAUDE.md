@@ -27,7 +27,7 @@ pytest registry/tests/test_registry.py::test_register_agent -v  # single
 
 Four packages, each with own `pyproject.toml`:
 
-- **registry/** — FastAPI. SQLite + bcrypt-hashed keys. ECDSA P-256 JWT signing. Skill page at `/`.
+- **registry/** — FastAPI. SQLite + bcrypt-hashed keys. ECDSA P-256 JWT signing. `skill.md` (agent-facing only) at `/`; `platform.md` (platform-facing only) at `/platform.md`.
 - **sdk/** — Python client + Click CLI. Stores creds at `~/.config/agentauth/credentials/{name}.json` (mode 600).
 - **agentboard/** — Demo platform. Verifies `platform_proof_token` via registry.
 - **agentblog/** — Blog platform. Long-form posts with categories & tags. Verifies via registry.
@@ -41,7 +41,8 @@ Four packages, each with own `pyproject.toml`:
 - **Registry ↔ SDK/CLI sync** — any change to the registry must be reflected in the SDK and CLI.
 - **Agent-first** — primary users are autonomous agents. API responses must be self-descriptive (key names explain themselves, no docs needed). Error messages must be **actionable**: tell the agent what went wrong AND what to do next (include the exact endpoint/command to fix it). Never return bare error codes or vague messages like "forbidden" — an agent cannot Google for help.
 - **Comment new code** — short comments on new methods/classes/files explaining purpose/reasoning.
-- **Keep docs in sync** — update relevant docs (README, registry-api.md, skill.md, etc.) after every task.
+- **Keep docs in sync** — update relevant docs (README, registry-api.md, skill.md, platform.md, etc.) after every task.
+- **skill.md is agent-facing only** — never add platform registration, platform keys, or platform-specific endpoints to skill.md. Platform onboarding goes in platform.md.
 - **CLI must be agent-friendly** — always support `--help`, show help when run without args (if appropriate), describe all options with parameters in help output.
 - **Markdown only** — never .docx for documentation.
 - **Commits** — never include `Co-Authored-By` or any Anthropic/Claude attribution lines in commit messages.
@@ -62,14 +63,21 @@ Four packages, each with own `pyproject.toml`:
 |---|---|---|
 | `POST /v1/agents/register` | None | Register → `registry_secret_key` + `platform_proof_token` |
 | `POST /v1/agents/me/proof` | secret key | Fresh proof token (5 min TTL) |
-| `GET /v1/verify-proof/{token}` | None | Verify proof token (platforms) |
+| `GET /v1/verify-proof/{token}` | None / platauth_ | Verify proof token (30/min IP, 300/min registered) |
 | `GET /.well-known/jwks.json` | None | Public key for local JWT verify |
 | `GET /v1/agents/me` | secret key | Own profile |
 | `POST /v1/agents/me/email` | secret key | Link email (Tier 2) |
-| `GET /v1/agents/{name}` | None | Public lookup |
+| `GET /v1/agents/{name}` | None | Public lookup (includes report_count) |
 | `GET /v1/agents` | None | List all |
 | `DELETE /v1/agents/{name}` | secret key | Revoke |
-| `GET /v1/admin/stats` | admin token | Registry stats (JSON/HTML) |
+| `POST /v1/platforms/register` | None | Register platform → `platform_secret_key` |
+| `GET /v1/platforms/{name}` | None | Public platform lookup |
+| `DELETE /v1/platforms/{name}` | platauth_ | Revoke platform |
+| `GET /v1/verify-platform/{token}` | None | Platform email verification |
+| `POST /v1/agents/{name}/reports` | platauth_ | Report an agent (one per platform) |
+| `DELETE /v1/agents/{name}/reports` | platauth_ | Retract a report |
+| `GET /v1/agents/{name}/reports` | None | Public report summary |
+| `GET /v1/admin/stats` | admin token | Registry stats (JSON/HTML, includes platform counts) |
 | `GET /mgmt` | admin token (query param) | Post management UI (agentboard + agentblog, hidden from OpenAPI) |
 
 ## Test Patterns

@@ -46,6 +46,18 @@ def _api_key(resp):
     return resp.json()["registry_secret_key"]
 
 
+def _register_platform(client, name="test_plat", domain="test.example.com", email=None):
+    payload = {"name": name, "domain": domain}
+    if email is not None:
+        payload["email"] = email
+    return client.post("/v1/platforms/register", json=payload)
+
+
+def _platform_key(resp):
+    """Extract platform_secret_key from platform registration response."""
+    return resp.json()["platform_secret_key"]
+
+
 # --- Registration ---
 
 
@@ -423,9 +435,261 @@ def test_skill_page_md(client):
     assert "curl" in resp.text
 
 
+# --- Platform registration ---
+
+
+def test_register_platform(client):
+    resp = _register_platform(client)
+    assert resp.status_code == 201
+    data = resp.json()
+    assert data["name"] == "test_plat"
+    assert data["domain"] == "test.example.com"
+    assert data["platform_secret_key"].startswith("platauth_")
+    assert data["active"] is True
+    assert data["verified"] is False
+    assert data["important"] is not None
+
+
+def test_register_platform_duplicate(client):
+    _register_platform(client, "taken_plat")
+    resp = _register_platform(client, "taken_plat")
+    assert resp.status_code == 409
+
+
+def test_register_platform_invalid_name(client):
+    resp = _register_platform(client, "Bad-Name")
+    assert resp.status_code == 422
+
+
+def test_get_platform(client):
+    _register_platform(client, "lookup_plat")
+    resp = client.get("/v1/platforms/lookup_plat")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["name"] == "lookup_plat"
+    assert data["platform_secret_key"] is None  # Never exposed on public lookup
+
+
+def test_get_platform_not_found(client):
+    resp = client.get("/v1/platforms/ghost_plat")
+    assert resp.status_code == 404
+
+
+def test_revoke_platform(client):
+    resp = _register_platform(client, "doomed_plat")
+    key = _platform_key(resp)
+
+    del_resp = client.delete("/v1/platforms/doomed_plat", headers={"Authorization": f"Bearer {key}"})
+    assert del_resp.status_code == 200
+    assert del_resp.json()["revoked"] is True
+
+    assert client.get("/v1/platforms/doomed_plat").status_code == 404
+
+
+def test_revoke_platform_wrong_key(client):
+    _register_platform(client, "safe_plat")
+    resp = client.delete("/v1/platforms/safe_plat", headers={"Authorization": "Bearer platauth_wrong"})
+    assert resp.status_code == 403
+
+
+def test_platform_email_verification(client, store):
+    resp = _register_platform(client, "email_plat", email="admin@example.com")
+    assert resp.status_code == 201
+
+    token = store.get_platform_pending_verification_token("email_plat")
+    assert token is not None
+
+    verify_resp = client.get(f"/v1/verify-platform/{token}")
+    assert verify_resp.status_code == 200
+    assert "email_plat" in verify_resp.text
+
+    platform = client.get("/v1/platforms/email_plat").json()
+    assert platform["verified"] is True
+
+
+def test_registered_platform_gets_higher_rate_limit(client):
+    """Registered platform with platauth_ Bearer should get 300/min, not 30/min."""
+    resp = _register_platform(client, "fast_plat")
+    key = _platform_key(resp)
+
+    # Send 31 requests — should not get rate limited (30/min is anonymous limit)
+    for _ in range(31):
+        r = client.get(
+            "/v1/verify-proof/fake_token",
+            headers={"Authorization": f"Bearer {key}"},
+        )
+        assert r.status_code != 429  # 401 (invalid token) is fine
+
+
+# --- Agent reports ---
+
+
+def test_platform_reports_agent(client):
+    _register(client, "bad_bot")
+    resp = _register_platform(client, "reporter_plat")
+    key = _platform_key(resp)
+
+    report_resp = client.post(
+        "/v1/agents/bad_bot/reports",
+        headers={"Authorization": f"Bearer {key}"},
+    )
+    assert report_resp.status_code == 201
+    assert report_resp.json()["reported"] is True
+
+
+def test_platform_reports_agent_duplicate(client):
+    _register(client, "bad_bot")
+    resp = _register_platform(client, "reporter_plat")
+    key = _platform_key(resp)
+
+    client.post("/v1/agents/bad_bot/reports", headers={"Authorization": f"Bearer {key}"})
+    dup_resp = client.post("/v1/agents/bad_bot/reports", headers={"Authorization": f"Bearer {key}"})
+    assert dup_resp.status_code == 409
+
+
+def test_different_platforms_report_same_agent(client):
+    _register(client, "bad_bot")
+    key_a = _platform_key(_register_platform(client, "plat_a"))
+    key_b = _platform_key(_register_platform(client, "plat_b"))
+
+    assert client.post("/v1/agents/bad_bot/reports", headers={"Authorization": f"Bearer {key_a}"}).status_code == 201
+    assert client.post("/v1/agents/bad_bot/reports", headers={"Authorization": f"Bearer {key_b}"}).status_code == 201
+
+
+def test_get_agent_reports(client):
+    _register(client, "reported_bot")
+    key_a = _platform_key(_register_platform(client, "plat_a"))
+    key_b = _platform_key(_register_platform(client, "plat_b"))
+
+    client.post("/v1/agents/reported_bot/reports", headers={"Authorization": f"Bearer {key_a}"})
+    client.post("/v1/agents/reported_bot/reports", headers={"Authorization": f"Bearer {key_b}"})
+
+    resp = client.get("/v1/agents/reported_bot/reports")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["report_count"] == 2
+    assert set(data["reporting_platforms"]) == {"plat_a", "plat_b"}
+
+
+def test_retract_report(client):
+    _register(client, "bad_bot")
+    key = _platform_key(_register_platform(client, "plat_a"))
+
+    client.post("/v1/agents/bad_bot/reports", headers={"Authorization": f"Bearer {key}"})
+
+    retract_resp = client.delete("/v1/agents/bad_bot/reports", headers={"Authorization": f"Bearer {key}"})
+    assert retract_resp.status_code == 204
+
+    reports = client.get("/v1/agents/bad_bot/reports").json()
+    assert reports["report_count"] == 0
+
+
+def test_retract_nonexistent_report(client):
+    _register(client, "good_bot")
+    key = _platform_key(_register_platform(client, "plat_a"))
+
+    resp = client.delete("/v1/agents/good_bot/reports", headers={"Authorization": f"Bearer {key}"})
+    assert resp.status_code == 404
+
+
+def test_report_agent_unauthenticated(client):
+    _register(client, "target_bot")
+    resp = client.post("/v1/agents/target_bot/reports")
+    assert resp.status_code == 401
+
+
+def test_report_nonexistent_agent(client):
+    key = _platform_key(_register_platform(client, "plat_a"))
+    resp = client.post("/v1/agents/ghost_bot/reports", headers={"Authorization": f"Bearer {key}"})
+    assert resp.status_code == 404
+
+
+def test_revoke_platform_cascades_reports(client):
+    """When a platform is revoked, its reports are cascade-deleted."""
+    _register(client, "bad_bot")
+    resp = _register_platform(client, "temp_plat")
+    key = _platform_key(resp)
+
+    client.post("/v1/agents/bad_bot/reports", headers={"Authorization": f"Bearer {key}"})
+    assert client.get("/v1/agents/bad_bot/reports").json()["report_count"] == 1
+
+    client.delete("/v1/platforms/temp_plat", headers={"Authorization": f"Bearer {key}"})
+    assert client.get("/v1/agents/bad_bot/reports").json()["report_count"] == 0
+
+
+# --- Report count on agent profile ---
+
+
+def test_agent_profile_includes_report_count(client):
+    """GET /v1/agents/{name} includes report_count and reporting_platforms."""
+    _register(client, "reported_bot")
+    key = _platform_key(_register_platform(client, "plat_a"))
+    client.post("/v1/agents/reported_bot/reports", headers={"Authorization": f"Bearer {key}"})
+
+    resp = client.get("/v1/agents/reported_bot")
+    data = resp.json()
+    assert data["report_count"] == 1
+    assert data["reporting_platforms"] == ["plat_a"]
+
+
+def test_agent_profile_no_reports(client):
+    """Agent with no reports shows report_count: 0."""
+    _register(client, "clean_bot")
+    resp = client.get("/v1/agents/clean_bot")
+    data = resp.json()
+    assert data["report_count"] == 0
+    assert data["reporting_platforms"] == []
+
+
+def test_verify_proof_does_not_include_reports(client):
+    """verify-proof response should NOT include report fields (hot path)."""
+    resp = _register(client, "test_bot")
+    proof_token = resp.json()["platform_proof_token"]
+
+    verify_resp = client.get(f"/v1/verify-proof/{proof_token}")
+    data = verify_resp.json()
+    assert "report_count" not in data
+    assert "reporting_platforms" not in data
+
+
+def test_platform_md_page(client):
+    resp = client.get("/platform.md")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "text/markdown; charset=utf-8"
+    assert "platauth_" in resp.text
+    assert "Platform" in resp.text
+
+
 # --- Admin reporting ---
 
 ADMIN_TOKEN = "test_admin_secret_token"
+
+
+# --- Rate limiting on verify-proof ---
+
+
+def test_verify_proof_rate_limit_allows_30(client):
+    """30 requests within a minute should all succeed (not 429)."""
+    for _ in range(30):
+        resp = client.get("/v1/verify-proof/fake_token")
+        assert resp.status_code != 429  # 401 (invalid token) is expected
+
+
+def test_verify_proof_rate_limit_blocks_31st(client):
+    """31st request should return 429 with platform registration nudge."""
+    for _ in range(30):
+        client.get("/v1/verify-proof/fake_token")
+
+    resp = client.get("/v1/verify-proof/fake_token")
+    assert resp.status_code == 429
+    assert "/v1/platforms/register" in resp.json()["detail"]
+
+
+def test_other_endpoints_not_rate_limited(client):
+    """Other endpoints like /v1/agents should not be rate limited."""
+    for _ in range(50):
+        resp = client.get("/v1/agents")
+        assert resp.status_code == 200
 
 
 def test_admin_stats_disabled_when_no_token(client):
@@ -481,6 +745,23 @@ def test_admin_stats_date_filter(client, monkeypatch):
     assert data["registrations_in_range"] == 1
     assert data["range_from"] == "2020-01-01"
     assert data["range_to"] == "2099-12-31"
+
+
+def test_admin_stats_includes_platform_counts(client, store, monkeypatch):
+    monkeypatch.setenv("AGENTAUTH_ADMIN_TOKEN", ADMIN_TOKEN)
+    _register(client, "bot_a")
+    _register_platform(client, "plat_a", email="a@example.com")
+    _register_platform(client, "plat_b")
+
+    # Verify one platform
+    token = store.get_platform_pending_verification_token("plat_a")
+    client.get(f"/v1/verify-platform/{token}")
+
+    resp = client.get("/v1/admin/stats", headers={"Authorization": f"Bearer {ADMIN_TOKEN}"})
+    data = resp.json()
+    assert data["platforms_total"] == 2
+    assert data["platforms_active"] == 2
+    assert data["platforms_verified"] == 1
 
 
 def test_admin_stats_html(client, monkeypatch):

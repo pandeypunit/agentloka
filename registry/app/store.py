@@ -16,7 +16,7 @@ from cryptography.hazmat.primitives.serialization import (
     load_pem_private_key,
 )
 
-from registry.app.models import AgentResponse
+from registry.app.models import AgentResponse, PlatformResponse
 
 PROOF_TOKEN_TTL_SECONDS = 300  # 5 minutes — reusable until expiry
 
@@ -36,13 +36,41 @@ CREATE INDEX IF NOT EXISTS idx_api_key_prefix ON agents(api_key_prefix);
 CREATE TABLE IF NOT EXISTS pending_verifications (
     token       TEXT PRIMARY KEY,
     agent_name  TEXT NOT NULL REFERENCES agents(name) ON DELETE CASCADE,
-    email       TEXT NOT NULL
+    email       TEXT NOT NULL,
+    created_at  TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS server_metadata (
     key     TEXT PRIMARY KEY,
     value   TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS platforms (
+    name              TEXT PRIMARY KEY,
+    domain            TEXT NOT NULL,
+    email             TEXT,
+    secret_key_hash   TEXT NOT NULL,
+    secret_key_prefix TEXT NOT NULL,
+    verified          INTEGER NOT NULL DEFAULT 0,
+    created_at        TEXT NOT NULL,
+    active            INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_platform_key_prefix ON platforms(secret_key_prefix);
+
+CREATE TABLE IF NOT EXISTS platform_pending_verifications (
+    token         TEXT PRIMARY KEY,
+    platform_name TEXT NOT NULL,
+    created_at    TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS agent_reports (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent_name    TEXT NOT NULL REFERENCES agents(name) ON DELETE CASCADE,
+    platform_name TEXT NOT NULL REFERENCES platforms(name) ON DELETE CASCADE,
+    reported_at   TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_one_report_per_platform
+    ON agent_reports(agent_name, platform_name);
 """
 
 
@@ -134,8 +162,8 @@ class RegistryStore:
         if email:
             verification_token = self._generate_verification_token()
             self._db.execute(
-                "INSERT INTO pending_verifications (token, agent_name, email) VALUES (?, ?, ?)",
-                (verification_token, name, email),
+                "INSERT INTO pending_verifications (token, agent_name, email, created_at) VALUES (?, ?, ?, ?)",
+                (verification_token, name, email, now),
             )
 
         self._db.commit()
@@ -181,9 +209,10 @@ class RegistryStore:
     def link_email(self, agent_name: str, email: str) -> str:
         """Link an email to an existing agent. Returns a verification token."""
         token = self._generate_verification_token()
+        now = datetime.now(UTC).isoformat()
         self._db.execute(
-            "INSERT INTO pending_verifications (token, agent_name, email) VALUES (?, ?, ?)",
-            (token, agent_name, email),
+            "INSERT INTO pending_verifications (token, agent_name, email, created_at) VALUES (?, ?, ?, ?)",
+            (token, agent_name, email, now),
         )
         self._db.commit()
         return token
@@ -226,7 +255,12 @@ class RegistryStore:
         ).fetchone()
         if not row:
             return None
-        return self._row_to_agent(row)
+        agent = self._row_to_agent(row)
+        # Attach report data to public profile
+        reports = self.get_agent_reports(name)
+        agent.report_count = reports["report_count"]
+        agent.reporting_platforms = reports["reporting_platforms"]
+        return agent
 
     def get_agent_by_key(self, api_key: str) -> AgentResponse | None:
         prefix = self._api_key_prefix(api_key)
@@ -256,6 +290,169 @@ class RegistryStore:
         self._db.execute("DELETE FROM agents WHERE name = ?", (name,))
         self._db.commit()
         return True
+
+    # --- Platform registration (mirrors agent pattern) ---
+
+    @staticmethod
+    def _generate_platform_key() -> str:
+        """Generate a platform secret key with platauth_ prefix."""
+        return "platauth_" + secrets.token_hex(24)
+
+    @staticmethod
+    def _platform_key_prefix(key: str) -> str:
+        """Extract prefix from a platauth_ key for indexed lookup."""
+        return key[10:18]
+
+    def _row_to_platform(self, row, platform_secret_key: str | None = None) -> PlatformResponse:
+        return PlatformResponse(
+            name=row["name"],
+            domain=row["domain"],
+            platform_secret_key=platform_secret_key,
+            verified=bool(row["verified"]),
+            created_at=datetime.fromisoformat(row["created_at"]),
+            active=bool(row["active"]),
+        )
+
+    def register_platform(
+        self, name: str, domain: str, email: str | None = None
+    ) -> tuple[PlatformResponse | None, str | None]:
+        """Register a new platform. Returns (platform, verification_token) or (None, None) if name is taken."""
+        existing = self._db.execute("SELECT 1 FROM platforms WHERE name = ?", (name,)).fetchone()
+        if existing:
+            return None, None
+
+        key = self._generate_platform_key()
+        now = datetime.now(UTC).isoformat()
+
+        self._db.execute(
+            "INSERT INTO platforms (name, domain, email, secret_key_hash, secret_key_prefix, verified, created_at, active) "
+            "VALUES (?, ?, ?, ?, ?, 0, ?, 1)",
+            (name, domain, email, self._hash_api_key(key), self._platform_key_prefix(key), now),
+        )
+
+        verification_token = None
+        if email:
+            verification_token = self._generate_verification_token()
+            self._db.execute(
+                "INSERT INTO platform_pending_verifications (token, platform_name, created_at) VALUES (?, ?, ?)",
+                (verification_token, name, now),
+            )
+
+        self._db.commit()
+
+        platform = PlatformResponse(
+            name=name,
+            domain=domain,
+            platform_secret_key=key,
+            important="⚠️ SAVE YOUR platform_secret_key! It is shown ONLY ONCE.",
+            verified=False,
+            created_at=datetime.fromisoformat(now),
+            active=True,
+        )
+        return platform, verification_token
+
+    def get_platform(self, name: str) -> PlatformResponse | None:
+        """Look up a platform by name. Public — no secret key in response."""
+        row = self._db.execute(
+            "SELECT name, domain, verified, created_at, active FROM platforms WHERE name = ?",
+            (name,),
+        ).fetchone()
+        if not row:
+            return None
+        return self._row_to_platform(row)
+
+    def get_platform_by_key(self, secret_key: str) -> PlatformResponse | None:
+        """Look up a platform by its secret key. Used for auth."""
+        prefix = self._platform_key_prefix(secret_key)
+        rows = self._db.execute(
+            "SELECT name, domain, secret_key_hash, verified, created_at, active "
+            "FROM platforms WHERE secret_key_prefix = ? AND active = 1",
+            (prefix,),
+        ).fetchall()
+        for row in rows:
+            if self._check_api_key(secret_key, row["secret_key_hash"]):
+                return self._row_to_platform(row)
+        return None
+
+    def revoke_platform(self, name: str, secret_key: str) -> bool:
+        """Revoke a platform. Must provide the correct secret key."""
+        row = self._db.execute(
+            "SELECT secret_key_hash FROM platforms WHERE name = ?", (name,)
+        ).fetchone()
+        if not row or not self._check_api_key(secret_key, row["secret_key_hash"]):
+            return False
+        self._db.execute("DELETE FROM platforms WHERE name = ?", (name,))
+        self._db.commit()
+        return True
+
+    def verify_platform_email(self, token: str) -> str | None:
+        """Verify a platform email token. Returns platform name on success, None on failure."""
+        row = self._db.execute(
+            "SELECT platform_name FROM platform_pending_verifications WHERE token = ?", (token,)
+        ).fetchone()
+        if not row:
+            return None
+
+        platform_name = row["platform_name"]
+        platform_exists = self._db.execute(
+            "SELECT 1 FROM platforms WHERE name = ?", (platform_name,)
+        ).fetchone()
+        if not platform_exists:
+            return None
+
+        self._db.execute("DELETE FROM platform_pending_verifications WHERE token = ?", (token,))
+        self._db.execute(
+            "UPDATE platforms SET verified = 1 WHERE name = ?", (platform_name,)
+        )
+        self._db.commit()
+        return platform_name
+
+    # --- Platform test helpers ---
+
+    def get_platform_pending_verification_token(self, platform_name: str) -> str | None:
+        """Get the pending verification token for a platform (if any)."""
+        row = self._db.execute(
+            "SELECT token FROM platform_pending_verifications WHERE platform_name = ?",
+            (platform_name,),
+        ).fetchone()
+        return row["token"] if row else None
+
+    # --- Agent reports (by registered platforms) ---
+
+    def report_agent(self, agent_name: str, platform_name: str) -> bool:
+        """File a report against an agent. Returns False if already reported by this platform."""
+        now = datetime.now(UTC).isoformat()
+        try:
+            self._db.execute(
+                "INSERT INTO agent_reports (agent_name, platform_name, reported_at) VALUES (?, ?, ?)",
+                (agent_name, platform_name, now),
+            )
+            self._db.commit()
+            return True
+        except sqlite3.IntegrityError:
+            return False
+
+    def retract_report(self, agent_name: str, platform_name: str) -> bool:
+        """Retract a report. Returns False if no report exists from this platform."""
+        cursor = self._db.execute(
+            "DELETE FROM agent_reports WHERE agent_name = ? AND platform_name = ?",
+            (agent_name, platform_name),
+        )
+        self._db.commit()
+        return cursor.rowcount > 0
+
+    def get_agent_reports(self, agent_name: str) -> dict:
+        """Get report summary for an agent."""
+        rows = self._db.execute(
+            "SELECT platform_name FROM agent_reports WHERE agent_name = ? ORDER BY reported_at",
+            (agent_name,),
+        ).fetchall()
+        platforms = [row["platform_name"] for row in rows]
+        return {
+            "agent_name": agent_name,
+            "report_count": len(platforms),
+            "reporting_platforms": platforms,
+        }
 
     # --- Admin reporting ---
 
@@ -296,6 +493,18 @@ class RegistryStore:
             "SELECT name, created_at FROM agents ORDER BY created_at DESC LIMIT 1"
         ).fetchone()
         stats["newest_agent"] = {"name": newest["name"], "created_at": newest["created_at"]} if newest else None
+
+        # Platform stats
+        plat_row = self._db.execute(
+            "SELECT COUNT(*) as total,"
+            " SUM(CASE WHEN active=1 THEN 1 ELSE 0 END) as active,"
+            " SUM(CASE WHEN verified=1 THEN 1 ELSE 0 END) as verified"
+            " FROM platforms"
+        ).fetchone()
+        stats["platforms_total"] = plat_row["total"] or 0
+        stats["platforms_active"] = plat_row["active"] or 0
+        stats["platforms_verified"] = plat_row["verified"] or 0
+
         stats["generated_at"] = now.isoformat()
         return stats
 

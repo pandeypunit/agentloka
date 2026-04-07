@@ -2,13 +2,15 @@
 
 from unittest.mock import AsyncMock, patch
 
-import httpx
 import pytest
 from fastapi.testclient import TestClient
 
 from agentboard.app import main
 from agentboard.app.main import app
 from agentboard.app.store import BoardStore
+
+# Patch target for SDK-based verify in verify_agent()
+_VERIFY_PATCH = "agentboard.app.main._auth.verify_proof_token_via_registry_async"
 
 
 @pytest.fixture(autouse=True)
@@ -27,41 +29,20 @@ def client():
     return TestClient(app)
 
 
-def _mock_registry_success(agent_name="test_bot", description="A test agent"):
-    """Create a mock that simulates a successful proof token verification."""
-    mock_response = AsyncMock()
-    mock_response.status_code = 200
-    # httpx .json() is sync, not async
-    mock_response.json = lambda: {
+def _mock_verify_success(agent_name="test_bot", description="A test agent"):
+    """Return value for a successful SDK verify call."""
+    return {
         "name": agent_name,
         "description": description,
         "verified": False,
         "active": True,
     }
 
-    mock_client = AsyncMock()
-    mock_client.get = AsyncMock(return_value=mock_response)
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=False)
-    return mock_client
-
-
-def _mock_registry_failure():
-    """Create a mock that simulates a failed proof token verification."""
-    mock_response = AsyncMock()
-    mock_response.status_code = 401
-
-    mock_client = AsyncMock()
-    mock_client.get = AsyncMock(return_value=mock_response)
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=False)
-    return mock_client
-
 
 def _create_post(client, message="Hello!", tags=None, agent_name="test_bot"):
     """Helper: create a post and reset the rate limiter for the next call."""
-    with patch("agentboard.app.main.httpx.AsyncClient") as mock:
-        mock.return_value = _mock_registry_success(agent_name)
+    with patch(_VERIFY_PATCH, new_callable=AsyncMock) as mock_verify:
+        mock_verify.return_value = _mock_verify_success(agent_name)
         body = {"message": message}
         if tags is not None:
             body["tags"] = tags
@@ -92,9 +73,9 @@ def test_landing_page_links_use_new_domain(client):
     assert "iagents.cc" not in resp.text
 
 
-@patch("agentboard.app.main.httpx.AsyncClient")
-def test_landing_page_with_posts(mock_async_client, client):
-    mock_async_client.return_value = _mock_registry_success()
+@patch(_VERIFY_PATCH, new_callable=AsyncMock)
+def test_landing_page_with_posts(mock_verify, client):
+    mock_verify.return_value = _mock_verify_success()
 
     client.post(
         "/v1/posts",
@@ -179,9 +160,9 @@ def test_skill_json_triggers_use_new_domain(client):
 # --- Post messages ---
 
 
-@patch("agentboard.app.main.httpx.AsyncClient")
-def test_create_post(mock_async_client, client):
-    mock_async_client.return_value = _mock_registry_success()
+@patch(_VERIFY_PATCH, new_callable=AsyncMock)
+def test_create_post(mock_verify, client):
+    mock_verify.return_value = _mock_verify_success()
 
     resp = client.post(
         "/v1/posts",
@@ -198,16 +179,16 @@ def test_create_post(mock_async_client, client):
     assert data["reply_count"] == 0
 
 
-@patch("agentboard.app.main.httpx.AsyncClient")
-def test_create_post_increments_id(mock_async_client, client):
-    mock_async_client.return_value = _mock_registry_success("bot_a")
+@patch(_VERIFY_PATCH, new_callable=AsyncMock)
+def test_create_post_increments_id(mock_verify, client):
+    mock_verify.return_value = _mock_verify_success("bot_a")
     client.post(
         "/v1/posts",
         json={"message": "First"},
         headers={"Authorization": "Bearer proof_test123"},
     )
 
-    mock_async_client.return_value = _mock_registry_success("bot_b")
+    mock_verify.return_value = _mock_verify_success("bot_b")
     resp = client.post(
         "/v1/posts",
         json={"message": "Second"},
@@ -225,9 +206,9 @@ def test_create_post_missing_auth(client):
     assert "iagents.cc" not in detail
 
 
-@patch("agentboard.app.main.httpx.AsyncClient")
-def test_create_post_invalid_key(mock_async_client, client):
-    mock_async_client.return_value = _mock_registry_failure()
+@patch(_VERIFY_PATCH, new_callable=AsyncMock)
+def test_create_post_invalid_key(mock_verify, client):
+    mock_verify.return_value = None
 
     resp = client.post(
         "/v1/posts",
@@ -238,9 +219,9 @@ def test_create_post_invalid_key(mock_async_client, client):
     assert "not verified" in resp.json()["detail"]
 
 
-@patch("agentboard.app.main.httpx.AsyncClient")
-def test_create_post_too_long(mock_async_client, client):
-    mock_async_client.return_value = _mock_registry_success()
+@patch(_VERIFY_PATCH, new_callable=AsyncMock)
+def test_create_post_too_long(mock_verify, client):
+    mock_verify.return_value = _mock_verify_success()
 
     resp = client.post(
         "/v1/posts",
@@ -265,13 +246,13 @@ def test_create_post_too_many_tags(client):
     assert resp.status_code == 422
 
 
-@patch("agentboard.app.main.httpx.AsyncClient")
-def test_list_posts_filter_by_tag(mock_async_client, client):
+@patch(_VERIFY_PATCH, new_callable=AsyncMock)
+def test_list_posts_filter_by_tag(mock_verify, client):
     _create_post(client, message="AI post", tags=["ai"])
     _create_post(client, message="Music post", tags=["music"])
     _create_post(client, message="Both post", tags=["ai", "music"])
 
-    mock_async_client.return_value = _mock_registry_success()
+    mock_verify.return_value = _mock_verify_success()
     resp = client.get("/v1/posts?tag=ai", headers={"Authorization": "Bearer proof_read"})
     assert resp.status_code == 200
     data = resp.json()
@@ -282,12 +263,12 @@ def test_list_posts_filter_by_tag(mock_async_client, client):
     assert "Music post" not in messages
 
 
-@patch("agentboard.app.main.httpx.AsyncClient")
-def test_list_tags(mock_async_client, client):
+@patch(_VERIFY_PATCH, new_callable=AsyncMock)
+def test_list_tags(mock_verify, client):
     _create_post(client, message="Post 1", tags=["ai", "agents"])
     _create_post(client, message="Post 2", tags=["music", "ai"])
 
-    mock_async_client.return_value = _mock_registry_success()
+    mock_verify.return_value = _mock_verify_success()
     resp = client.get("/v1/tags", headers={"Authorization": "Bearer proof_read"})
     assert resp.status_code == 200
     data = resp.json()
@@ -298,23 +279,23 @@ def test_list_tags(mock_async_client, client):
 # --- List posts ---
 
 
-@patch("agentboard.app.main.httpx.AsyncClient")
-def test_list_posts(mock_async_client, client):
-    mock_async_client.return_value = _mock_registry_success("bot_a")
+@patch(_VERIFY_PATCH, new_callable=AsyncMock)
+def test_list_posts(mock_verify, client):
+    mock_verify.return_value = _mock_verify_success("bot_a")
     client.post(
         "/v1/posts",
         json={"message": "First post"},
         headers={"Authorization": "Bearer proof_test123"},
     )
 
-    mock_async_client.return_value = _mock_registry_success("bot_b")
+    mock_verify.return_value = _mock_verify_success("bot_b")
     client.post(
         "/v1/posts",
         json={"message": "Second post"},
         headers={"Authorization": "Bearer proof_test123"},
     )
 
-    mock_async_client.return_value = _mock_registry_success()
+    mock_verify.return_value = _mock_verify_success()
     resp = client.get("/v1/posts", headers={"Authorization": "Bearer proof_read"})
     assert resp.status_code == 200
     data = resp.json()
@@ -326,9 +307,9 @@ def test_list_posts(mock_async_client, client):
     assert data["posts"][1]["message"] == "First post"
 
 
-@patch("agentboard.app.main.httpx.AsyncClient")
-def test_list_posts_empty(mock_async_client, client):
-    mock_async_client.return_value = _mock_registry_success()
+@patch(_VERIFY_PATCH, new_callable=AsyncMock)
+def test_list_posts_empty(mock_verify, client):
+    mock_verify.return_value = _mock_verify_success()
     resp = client.get("/v1/posts", headers={"Authorization": "Bearer proof_read"})
     assert resp.status_code == 200
     assert resp.json()["count"] == 0
@@ -337,13 +318,13 @@ def test_list_posts_empty(mock_async_client, client):
 # --- Pagination ---
 
 
-@patch("agentboard.app.main.httpx.AsyncClient")
-def test_list_posts_pagination(mock_async_client, client):
+@patch(_VERIFY_PATCH, new_callable=AsyncMock)
+def test_list_posts_pagination(mock_verify, client):
     """Create 3 posts, request page=1 limit=2 — should get 2 posts, total_count=3."""
     for i in range(3):
         _create_post(client, message=f"Post {i}", agent_name=f"bot_{i}")
 
-    mock_async_client.return_value = _mock_registry_success()
+    mock_verify.return_value = _mock_verify_success()
     resp = client.get("/v1/posts?page=1&limit=2", headers={"Authorization": "Bearer proof_read"})
     data = resp.json()
     assert data["count"] == 2
@@ -352,13 +333,13 @@ def test_list_posts_pagination(mock_async_client, client):
     assert data["limit"] == 2
 
 
-@patch("agentboard.app.main.httpx.AsyncClient")
-def test_list_posts_page_2(mock_async_client, client):
+@patch(_VERIFY_PATCH, new_callable=AsyncMock)
+def test_list_posts_page_2(mock_verify, client):
     """Page 2 with limit=2 from 3 posts should return 1 post."""
     for i in range(3):
         _create_post(client, message=f"Post {i}", agent_name=f"bot_{i}")
 
-    mock_async_client.return_value = _mock_registry_success()
+    mock_verify.return_value = _mock_verify_success()
     resp = client.get("/v1/posts?page=2&limit=2", headers={"Authorization": "Bearer proof_read"})
     data = resp.json()
     assert data["count"] == 1
@@ -366,13 +347,13 @@ def test_list_posts_page_2(mock_async_client, client):
     assert data["page"] == 2
 
 
-@patch("agentboard.app.main.httpx.AsyncClient")
-def test_list_agent_posts_pagination(mock_async_client, client):
+@patch(_VERIFY_PATCH, new_callable=AsyncMock)
+def test_list_agent_posts_pagination(mock_verify, client):
     """Pagination on the agent-specific endpoint."""
     for i in range(3):
         _create_post(client, message=f"Post {i}", agent_name="same_bot")
 
-    mock_async_client.return_value = _mock_registry_success()
+    mock_verify.return_value = _mock_verify_success()
     resp = client.get("/v1/posts/same_bot?page=1&limit=2", headers={"Authorization": "Bearer proof_read"})
     data = resp.json()
     assert data["count"] == 2
@@ -382,24 +363,24 @@ def test_list_agent_posts_pagination(mock_async_client, client):
 # --- List posts by agent ---
 
 
-@patch("agentboard.app.main.httpx.AsyncClient")
-def test_list_agent_posts(mock_async_client, client):
+@patch(_VERIFY_PATCH, new_callable=AsyncMock)
+def test_list_agent_posts(mock_verify, client):
     # Post from two different agents
-    mock_async_client.return_value = _mock_registry_success("alpha_bot")
+    mock_verify.return_value = _mock_verify_success("alpha_bot")
     client.post(
         "/v1/posts",
         json={"message": "Alpha says hi"},
         headers={"Authorization": "Bearer proof_alpha"},
     )
 
-    mock_async_client.return_value = _mock_registry_success("beta_bot")
+    mock_verify.return_value = _mock_verify_success("beta_bot")
     client.post(
         "/v1/posts",
         json={"message": "Beta says hi"},
         headers={"Authorization": "Bearer proof_beta"},
     )
 
-    mock_async_client.return_value = _mock_registry_success()
+    mock_verify.return_value = _mock_verify_success()
     resp = client.get("/v1/posts/alpha_bot", headers={"Authorization": "Bearer proof_read"})
     assert resp.status_code == 200
     data = resp.json()
@@ -408,9 +389,9 @@ def test_list_agent_posts(mock_async_client, client):
     assert data["posts"][0]["agent_name"] == "alpha_bot"
 
 
-@patch("agentboard.app.main.httpx.AsyncClient")
-def test_list_agent_posts_empty(mock_async_client, client):
-    mock_async_client.return_value = _mock_registry_success()
+@patch(_VERIFY_PATCH, new_callable=AsyncMock)
+def test_list_agent_posts_empty(mock_verify, client):
+    mock_verify.return_value = _mock_verify_success()
     resp = client.get("/v1/posts/nobody", headers={"Authorization": "Bearer proof_read"})
     assert resp.status_code == 200
     assert resp.json()["count"] == 0
@@ -419,35 +400,35 @@ def test_list_agent_posts_empty(mock_async_client, client):
 # --- Delete own post ---
 
 
-@patch("agentboard.app.main.httpx.AsyncClient")
-def test_delete_own_post(mock_async_client, client):
+@patch(_VERIFY_PATCH, new_callable=AsyncMock)
+def test_delete_own_post(mock_verify, client):
     """Agent can delete their own post — 204, then post is gone."""
     _create_post(client, message="Delete me", agent_name="test_bot")
 
-    mock_async_client.return_value = _mock_registry_success("test_bot")
+    mock_verify.return_value = _mock_verify_success("test_bot")
     resp = client.delete("/v1/posts/1", headers={"Authorization": "Bearer proof_del"})
     assert resp.status_code == 204
 
     # Verify gone
-    mock_async_client.return_value = _mock_registry_success()
+    mock_verify.return_value = _mock_verify_success()
     resp = client.get("/v1/posts", headers={"Authorization": "Bearer proof_read"})
     assert resp.json()["count"] == 0
 
 
-@patch("agentboard.app.main.httpx.AsyncClient")
-def test_delete_other_agents_post_forbidden(mock_async_client, client):
+@patch(_VERIFY_PATCH, new_callable=AsyncMock)
+def test_delete_other_agents_post_forbidden(mock_verify, client):
     """Deleting another agent's post returns 403."""
     _create_post(client, message="Not yours", agent_name="agent_a")
 
-    mock_async_client.return_value = _mock_registry_success("agent_b")
+    mock_verify.return_value = _mock_verify_success("agent_b")
     resp = client.delete("/v1/posts/1", headers={"Authorization": "Bearer proof_del"})
     assert resp.status_code == 403
 
 
-@patch("agentboard.app.main.httpx.AsyncClient")
-def test_delete_post_not_found(mock_async_client, client):
+@patch(_VERIFY_PATCH, new_callable=AsyncMock)
+def test_delete_post_not_found(mock_verify, client):
     """Deleting a non-existent post returns 404."""
-    mock_async_client.return_value = _mock_registry_success()
+    mock_verify.return_value = _mock_verify_success()
     resp = client.delete("/v1/posts/999", headers={"Authorization": "Bearer proof_del"})
     assert resp.status_code == 404
 
@@ -455,12 +436,12 @@ def test_delete_post_not_found(mock_async_client, client):
 # --- Replies ---
 
 
-@patch("agentboard.app.main.httpx.AsyncClient")
-def test_create_reply(mock_async_client, client):
+@patch(_VERIFY_PATCH, new_callable=AsyncMock)
+def test_create_reply(mock_verify, client):
     """Create a reply on an existing post — 201 with reply fields."""
     _create_post(client, message="Original post")
 
-    mock_async_client.return_value = _mock_registry_success("replier")
+    mock_verify.return_value = _mock_verify_success("replier")
     resp = client.post(
         "/v1/posts/1/replies",
         json={"body": "Great post!"},
@@ -473,10 +454,10 @@ def test_create_reply(mock_async_client, client):
     assert data["body"] == "Great post!"
 
 
-@patch("agentboard.app.main.httpx.AsyncClient")
-def test_create_reply_nonexistent_post(mock_async_client, client):
+@patch(_VERIFY_PATCH, new_callable=AsyncMock)
+def test_create_reply_nonexistent_post(mock_verify, client):
     """Reply to a non-existent post returns 404."""
-    mock_async_client.return_value = _mock_registry_success()
+    mock_verify.return_value = _mock_verify_success()
     resp = client.post(
         "/v1/posts/999/replies",
         json={"body": "Reply to nothing"},
@@ -485,13 +466,13 @@ def test_create_reply_nonexistent_post(mock_async_client, client):
     assert resp.status_code == 404
 
 
-@patch("agentboard.app.main.httpx.AsyncClient")
-def test_list_replies(mock_async_client, client):
+@patch(_VERIFY_PATCH, new_callable=AsyncMock)
+def test_list_replies(mock_verify, client):
     """List replies on a post — oldest first, with pagination fields."""
     _create_post(client, message="Original post")
 
     # Create two replies from different agents
-    mock_async_client.return_value = _mock_registry_success("bot_a")
+    mock_verify.return_value = _mock_verify_success("bot_a")
     client.post(
         "/v1/posts/1/replies",
         json={"body": "First reply"},
@@ -499,14 +480,14 @@ def test_list_replies(mock_async_client, client):
     )
     main.agent_reply_limiter.reset("bot_a")
 
-    mock_async_client.return_value = _mock_registry_success("bot_b")
+    mock_verify.return_value = _mock_verify_success("bot_b")
     client.post(
         "/v1/posts/1/replies",
         json={"body": "Second reply"},
         headers={"Authorization": "Bearer proof_b"},
     )
 
-    mock_async_client.return_value = _mock_registry_success()
+    mock_verify.return_value = _mock_verify_success()
     resp = client.get("/v1/posts/1/replies", headers={"Authorization": "Bearer proof_read"})
     assert resp.status_code == 200
     data = resp.json()
@@ -517,51 +498,51 @@ def test_list_replies(mock_async_client, client):
     assert data["replies"][1]["body"] == "Second reply"
 
 
-@patch("agentboard.app.main.httpx.AsyncClient")
-def test_delete_own_reply(mock_async_client, client):
+@patch(_VERIFY_PATCH, new_callable=AsyncMock)
+def test_delete_own_reply(mock_verify, client):
     """Agent can delete their own reply — 204."""
     _create_post(client, message="A post")
 
-    mock_async_client.return_value = _mock_registry_success("replier")
+    mock_verify.return_value = _mock_verify_success("replier")
     client.post(
         "/v1/posts/1/replies",
         json={"body": "My reply"},
         headers={"Authorization": "Bearer proof_reply"},
     )
 
-    mock_async_client.return_value = _mock_registry_success("replier")
+    mock_verify.return_value = _mock_verify_success("replier")
     resp = client.delete("/v1/posts/1/replies/1", headers={"Authorization": "Bearer proof_del"})
     assert resp.status_code == 204
 
     # Verify gone
-    mock_async_client.return_value = _mock_registry_success()
+    mock_verify.return_value = _mock_verify_success()
     resp = client.get("/v1/posts/1/replies", headers={"Authorization": "Bearer proof_read"})
     assert resp.json()["count"] == 0
 
 
-@patch("agentboard.app.main.httpx.AsyncClient")
-def test_delete_other_agents_reply_forbidden(mock_async_client, client):
+@patch(_VERIFY_PATCH, new_callable=AsyncMock)
+def test_delete_other_agents_reply_forbidden(mock_verify, client):
     """Deleting another agent's reply returns 403."""
     _create_post(client, message="A post")
 
-    mock_async_client.return_value = _mock_registry_success("agent_a")
+    mock_verify.return_value = _mock_verify_success("agent_a")
     client.post(
         "/v1/posts/1/replies",
         json={"body": "Agent A's reply"},
         headers={"Authorization": "Bearer proof_a"},
     )
 
-    mock_async_client.return_value = _mock_registry_success("agent_b")
+    mock_verify.return_value = _mock_verify_success("agent_b")
     resp = client.delete("/v1/posts/1/replies/1", headers={"Authorization": "Bearer proof_del"})
     assert resp.status_code == 403
 
 
-@patch("agentboard.app.main.httpx.AsyncClient")
-def test_reply_rate_limit(mock_async_client, client):
+@patch(_VERIFY_PATCH, new_callable=AsyncMock)
+def test_reply_rate_limit(mock_verify, client):
     """Second reply in quick succession should be rate-limited (429)."""
     _create_post(client, message="A post")
 
-    mock_async_client.return_value = _mock_registry_success("fast_replier")
+    mock_verify.return_value = _mock_verify_success("fast_replier")
     resp1 = client.post(
         "/v1/posts/1/replies",
         json={"body": "First reply"},
@@ -578,19 +559,19 @@ def test_reply_rate_limit(mock_async_client, client):
     assert resp2.json()["retry_after"] > 0
 
 
-@patch("agentboard.app.main.httpx.AsyncClient")
-def test_reply_count_in_post(mock_async_client, client):
+@patch(_VERIFY_PATCH, new_callable=AsyncMock)
+def test_reply_count_in_post(mock_verify, client):
     """Post response should include reply_count."""
     _create_post(client, message="A post")
 
-    mock_async_client.return_value = _mock_registry_success("replier")
+    mock_verify.return_value = _mock_verify_success("replier")
     client.post(
         "/v1/posts/1/replies",
         json={"body": "A reply"},
         headers={"Authorization": "Bearer proof_reply"},
     )
 
-    mock_async_client.return_value = _mock_registry_success()
+    mock_verify.return_value = _mock_verify_success()
     resp = client.get("/v1/posts", headers={"Authorization": "Bearer proof_read"})
     assert resp.json()["posts"][0]["reply_count"] == 1
 
@@ -643,10 +624,10 @@ def test_landing_page_shows_tags(client):
 # --- Rate limiting ---
 
 
-@patch("agentboard.app.main.httpx.AsyncClient")
-def test_post_rate_limit_unverified(mock_async_client, client):
+@patch(_VERIFY_PATCH, new_callable=AsyncMock)
+def test_post_rate_limit_unverified(mock_verify, client):
     """Unverified agent: second post should be rate-limited."""
-    mock_async_client.return_value = _mock_registry_success()
+    mock_verify.return_value = _mock_verify_success()
 
     resp1 = client.post(
         "/v1/posts",
@@ -667,10 +648,10 @@ def test_post_rate_limit_unverified(mock_async_client, client):
     assert "Retry-After" in resp2.headers
 
 
-@patch("agentboard.app.main.httpx.AsyncClient")
-def test_post_rate_limit_different_agents(mock_async_client, client):
+@patch(_VERIFY_PATCH, new_callable=AsyncMock)
+def test_post_rate_limit_different_agents(mock_verify, client):
     """Different agents should have independent rate limits."""
-    mock_async_client.return_value = _mock_registry_success("agent_a")
+    mock_verify.return_value = _mock_verify_success("agent_a")
     resp1 = client.post(
         "/v1/posts",
         json={"message": "From A"},
@@ -678,7 +659,7 @@ def test_post_rate_limit_different_agents(mock_async_client, client):
     )
     assert resp1.status_code == 201
 
-    mock_async_client.return_value = _mock_registry_success("agent_b")
+    mock_verify.return_value = _mock_verify_success("agent_b")
     resp2 = client.post(
         "/v1/posts",
         json={"message": "From B"},

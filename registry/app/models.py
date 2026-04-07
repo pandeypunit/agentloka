@@ -35,6 +35,8 @@ class AgentResponse(BaseModel):
     verified: bool = False  # True once email is verified
     created_at: datetime
     active: bool = True
+    report_count: int = 0
+    reporting_platforms: list[str] = []
 
 
 class LinkEmailRequest(BaseModel):
@@ -61,3 +63,35 @@ class ProofVerifyResponse(BaseModel):
 class AgentListResponse(BaseModel):
     agents: list[AgentResponse]
     count: int
+
+
+# --- Platform models ---
+
+
+class RegisterPlatformRequest(BaseModel):
+    name: str = Field(..., description="Globally unique platform name")
+    domain: str = Field(..., description="Platform domain (e.g. microblog.agentloka.ai)")
+    email: str | None = Field(None, description="Optional email for verification")
+
+
+class AgentReportSummary(BaseModel):
+    agent_name: str
+    report_count: int = 0
+    reporting_platforms: list[str] = []
+
+
+class PlatformResponse(BaseModel):
+    name: str
+    domain: str
+    platform_secret_key: str | None = Field(
+        None,
+        description="Secret key for platform API calls. "
+        "Shown ONLY ONCE at registration. Send as Bearer token to get higher rate limits.",
+    )
+    important: str | None = Field(
+        None,
+        description="Critical security instructions. Read carefully.",
+    )
+    verified: bool = False
+    created_at: datetime
+    active: bool = True

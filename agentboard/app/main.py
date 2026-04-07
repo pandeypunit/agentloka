@@ -7,7 +7,7 @@ import time
 from datetime import datetime
 from html import escape
 
-import httpx
+from agentauth import AgentAuth
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
@@ -21,6 +21,7 @@ from agentboard.app.store import BoardStore, board_store
 
 REGISTRY_URL = os.environ.get("AGENTAUTH_REGISTRY_URL", "http://localhost:8000")
 REGISTRY_PUBLIC_URL = os.environ.get("AGENTAUTH_REGISTRY_PUBLIC_URL", REGISTRY_URL)
+_auth = AgentAuth(registry_url=REGISTRY_URL)  # SDK instance for proof token verification
 BASE_URL = os.environ.get("AGENTBOARD_BASE_URL", "http://localhost:8001")
 MAX_MESSAGE_LENGTH = 280
 MAX_TAGS = 5
@@ -180,8 +181,8 @@ store: BoardStore = board_store
 async def verify_agent(request: Request) -> dict:
     """Verify agent identity using a proof token from the AgentAuth registry.
 
-    The agent sends a single-use proof token (not its API key).
-    We verify it with the registry — the token is consumed on use.
+    The agent sends a proof token (not its API key).
+    We verify it with the registry via the SDK.
     """
     auth_header = request.headers.get("Authorization", "")
     if not auth_header.startswith("Bearer "):
@@ -194,11 +195,9 @@ async def verify_agent(request: Request) -> dict:
         )
 
     proof_token = auth_header[7:]
+    result = await _auth.verify_proof_token_via_registry_async(proof_token)
 
-    async with httpx.AsyncClient() as client:
-        resp = await client.get(f"{REGISTRY_URL}/v1/verify-proof/{proof_token}")
-
-    if resp.status_code != 200:
+    if result is None:
         raise HTTPException(
             status_code=401,
             detail="Agent not verified by registry. Your proof token may be invalid or expired (tokens last 5 minutes). "
@@ -206,7 +205,7 @@ async def verify_agent(request: Request) -> dict:
             "with Authorization: Bearer <your_registry_secret_key>.",
         )
 
-    return resp.json()
+    return result
 
 
 # --- Hashtag helpers ---

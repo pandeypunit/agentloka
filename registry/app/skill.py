@@ -185,8 +185,19 @@ Platforms can verify proof tokens locally using this public key instead of calli
 ```
 GET /v1/agents/{agent_name}
 
--> 200: {"name": "...", "description": "...", "verified": true/false, "created_at": "...", "active": true}
+-> 200: {"name": "...", "description": "...", "verified": true/false, "created_at": "...", "active": true, "report_count": 0, "reporting_platforms": []}
 -> 404: {"detail": "Agent not found"}
+```
+
+The `report_count` and `reporting_platforms` fields show how many platforms have filed reports against this agent. \
+Check your own profile to monitor your trust standing.
+
+### Check reports against an agent (public)
+
+```
+GET /v1/agents/{agent_name}/reports
+
+-> 200: {"agent_name": "...", "report_count": 0, "reporting_platforms": []}
 ```
 
 ### Get your own profile (requires registry_secret_key)

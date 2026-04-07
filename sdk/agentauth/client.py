@@ -191,15 +191,207 @@ class AgentAuth:
         except jwt.InvalidTokenError:
             return None
 
-    def verify_proof_token_via_registry(self, token: str) -> dict | None:
+    def verify_proof_token_via_registry(
+        self, token: str, platform_secret_key: str | None = None
+    ) -> dict | None:
         """Verify a platform_proof_token by calling the registry.
 
         Returns agent info (name, description, verified, active) on success,
         None on invalid or expired token.
 
+        If platform_secret_key is provided, it is sent as Bearer auth to get
+        the higher rate limit (300/min vs 30/min for unregistered callers).
+
         This is Option A — simple but requires a network call per verification.
         """
-        resp = httpx.get(f"{self.registry_url}/v1/verify-proof/{token}")
+        headers = {}
+        if platform_secret_key:
+            headers["Authorization"] = f"Bearer {platform_secret_key}"
+        resp = httpx.get(f"{self.registry_url}/v1/verify-proof/{token}", headers=headers)
         if resp.status_code != 200:
             return None
+        return resp.json()
+
+    async def verify_proof_token_via_registry_async(
+        self, token: str, platform_secret_key: str | None = None
+    ) -> dict | None:
+        """Async version of verify_proof_token_via_registry.
+
+        Returns agent info (name, description, verified, active) on success,
+        None on invalid or expired token.
+
+        If platform_secret_key is provided, it is sent as Bearer auth to get
+        the higher rate limit (300/min vs 30/min for unregistered callers).
+        """
+        headers = {}
+        if platform_secret_key:
+            headers["Authorization"] = f"Bearer {platform_secret_key}"
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                f"{self.registry_url}/v1/verify-proof/{token}", headers=headers
+            )
+        if resp.status_code != 200:
+            return None
+        return resp.json()
+
+    # --- Platform registration ---
+
+    def _platform_credentials_path(self, platform_name: str) -> Path:
+        """Path to platform credentials file."""
+        plat_dir = self.config_dir / "platforms"
+        plat_dir.mkdir(parents=True, exist_ok=True)
+        return plat_dir / f"{platform_name}.json"
+
+    def register_platform(self, name: str, domain: str, email: str | None = None) -> dict:
+        """Register a new platform.
+
+        Returns response with platform_secret_key (shown once).
+        Saves credentials to ~/.config/agentauth/platforms/<name>.json.
+        """
+        payload = {"name": name, "domain": domain}
+        if email is not None:
+            payload["email"] = email
+        resp = httpx.post(f"{self.registry_url}/v1/platforms/register", json=payload)
+        resp.raise_for_status()
+        data = resp.json()
+
+        path = self._platform_credentials_path(name)
+        path.write_text(json.dumps({
+            "name": name,
+            "platform_secret_key": data["platform_secret_key"],
+        }, indent=2))
+        path.chmod(0o600)
+
+        return data
+
+    async def register_platform_async(self, name: str, domain: str, email: str | None = None) -> dict:
+        """Async version of register_platform."""
+        payload = {"name": name, "domain": domain}
+        if email is not None:
+            payload["email"] = email
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(f"{self.registry_url}/v1/platforms/register", json=payload)
+        resp.raise_for_status()
+        data = resp.json()
+
+        path = self._platform_credentials_path(name)
+        path.write_text(json.dumps({
+            "name": name,
+            "platform_secret_key": data["platform_secret_key"],
+        }, indent=2))
+        path.chmod(0o600)
+
+        return data
+
+    def get_platform(self, platform_name: str) -> dict:
+        """Look up any platform's public profile."""
+        resp = httpx.get(f"{self.registry_url}/v1/platforms/{platform_name}")
+        resp.raise_for_status()
+        return resp.json()
+
+    async def get_platform_async(self, platform_name: str) -> dict:
+        """Async version of get_platform."""
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(f"{self.registry_url}/v1/platforms/{platform_name}")
+        resp.raise_for_status()
+        return resp.json()
+
+    def revoke_platform(self, platform_name: str) -> bool:
+        """Revoke a platform from the registry and delete local credentials."""
+        path = self._platform_credentials_path(platform_name)
+        if not path.exists():
+            raise FileNotFoundError(
+                f"No credentials found for platform '{platform_name}'. Register it first."
+            )
+        creds = json.loads(path.read_text())
+        resp = httpx.delete(
+            f"{self.registry_url}/v1/platforms/{platform_name}",
+            headers={"Authorization": f"Bearer {creds['platform_secret_key']}"},
+        )
+        path.unlink(missing_ok=True)
+
+        if resp.status_code == 403:
+            return False
+        resp.raise_for_status()
+        return True
+
+    async def revoke_platform_async(self, platform_name: str) -> bool:
+        """Async version of revoke_platform."""
+        path = self._platform_credentials_path(platform_name)
+        if not path.exists():
+            raise FileNotFoundError(
+                f"No credentials found for platform '{platform_name}'. Register it first."
+            )
+        creds = json.loads(path.read_text())
+        async with httpx.AsyncClient() as client:
+            resp = await client.delete(
+                f"{self.registry_url}/v1/platforms/{platform_name}",
+                headers={"Authorization": f"Bearer {creds['platform_secret_key']}"},
+            )
+        path.unlink(missing_ok=True)
+
+        if resp.status_code == 403:
+            return False
+        resp.raise_for_status()
+        return True
+
+    # --- Agent reporting (by platforms) ---
+
+    def report_agent(self, platform_secret_key: str, agent_name: str) -> bool:
+        """Report an agent. Requires platform_secret_key for auth. Returns True on success."""
+        resp = httpx.post(
+            f"{self.registry_url}/v1/agents/{agent_name}/reports",
+            headers={"Authorization": f"Bearer {platform_secret_key}"},
+        )
+        if resp.status_code == 409:
+            return False  # Already reported
+        resp.raise_for_status()
+        return True
+
+    async def report_agent_async(self, platform_secret_key: str, agent_name: str) -> bool:
+        """Async version of report_agent."""
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"{self.registry_url}/v1/agents/{agent_name}/reports",
+                headers={"Authorization": f"Bearer {platform_secret_key}"},
+            )
+        if resp.status_code == 409:
+            return False
+        resp.raise_for_status()
+        return True
+
+    def retract_report(self, platform_secret_key: str, agent_name: str) -> bool:
+        """Retract a report against an agent. Returns True on success, False if no report exists."""
+        resp = httpx.delete(
+            f"{self.registry_url}/v1/agents/{agent_name}/reports",
+            headers={"Authorization": f"Bearer {platform_secret_key}"},
+        )
+        if resp.status_code == 404:
+            return False
+        resp.raise_for_status()
+        return True
+
+    async def retract_report_async(self, platform_secret_key: str, agent_name: str) -> bool:
+        """Async version of retract_report."""
+        async with httpx.AsyncClient() as client:
+            resp = await client.delete(
+                f"{self.registry_url}/v1/agents/{agent_name}/reports",
+                headers={"Authorization": f"Bearer {platform_secret_key}"},
+            )
+        if resp.status_code == 404:
+            return False
+        resp.raise_for_status()
+        return True
+
+    def get_agent_reports(self, agent_name: str) -> dict:
+        """Get report summary for an agent. Public — no auth needed."""
+        resp = httpx.get(f"{self.registry_url}/v1/agents/{agent_name}/reports")
+        resp.raise_for_status()
+        return resp.json()
+
+    async def get_agent_reports_async(self, agent_name: str) -> dict:
+        """Async version of get_agent_reports."""
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(f"{self.registry_url}/v1/agents/{agent_name}/reports")
+        resp.raise_for_status()
         return resp.json()
