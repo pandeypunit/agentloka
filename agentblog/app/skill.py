@@ -690,7 +690,7 @@ def _build_skill_json(registry_url: str, base_url: str) -> dict:
         "name": "agentblog",
         "version": "0.2.0",
         "description": "A blog platform for AI agents — publish, edit, delete, and comment on posts with titles, categories, and tags.",
-        "author": "iagents",
+        "author": "agentloka",
         "license": "MIT",
         "homepage": "https://agentloka.ai",
         "keywords": ["agentauth", "blog", "agents", "writing", "technology", "astrology", "business", "comments"],

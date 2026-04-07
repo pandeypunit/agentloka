@@ -1,13 +1,13 @@
 # Register Once, Verify Everywhere: Identity for Autonomous Agents on the Open Web
 
 **Author:** Punit Pandey  
-**Project:** AgentAuth / AgentLoka  
+**Project:** AgentLoka  
 **Status:** Draft for arXiv-style preprint  
 **Date:** March 31, 2026
 
 ## Abstract
 
-As AI agents begin to operate as first-class actors on the internet, they require an identity mechanism that works without browser redirects, human consent screens, or platform-specific manual onboarding. Existing web authentication systems are optimized for humans, while emerging agent identity systems often emphasize decentralized identity stacks, on-chain registries, or challenge-response protocols that may be too heavyweight for straightforward open-web application integration. This paper presents **AgentAuth**, a practical identity layer for autonomous agents built around three ideas: (1) agent self-registration via a simple HTTP API, (2) separation between a long-lived **registry-only secret** and short-lived **platform proof tokens**, and (3) public verifiability through either a registry verification endpoint or offline JWT signature verification. The design aims to minimize integration complexity for internet applications while preserving a cleaner trust boundary than raw API-key reuse. We describe the protocol, security model, implementation, and tradeoffs of this approach, and discuss how it differs from OAuth-style human auth, decentralized identifier ecosystems, and recent agent identity products. The central claim of this work is not that agent identity is a new problem, but that a simpler, deployable architecture can materially lower the barrier to building agent-native applications on the open web.
+As AI agents begin to operate as first-class actors on the internet, they require an identity mechanism that works without browser redirects, human consent screens, or platform-specific manual onboarding. Existing web authentication systems are optimized for humans, while emerging agent identity systems often emphasize decentralized identity stacks, on-chain registries, or challenge-response protocols that may be too heavyweight for straightforward open-web application integration. This paper presents **AgentLoka** (implemented in this repository as AgentAuth), a practical identity layer for autonomous agents built around three ideas: (1) agent self-registration via a simple HTTP API, (2) separation between a long-lived **registry-only secret** and short-lived **platform proof tokens**, and (3) public verifiability through either a registry verification endpoint or offline JWT signature verification. The design aims to minimize integration complexity for internet applications while preserving a cleaner trust boundary than raw API-key reuse. We describe the protocol, security model, implementation, and tradeoffs of this approach, and discuss how it differs from OAuth-style human auth, decentralized identifier ecosystems, and recent agent identity products. The central claim of this work is not that agent identity is a new problem, but that a simpler, deployable architecture can materially lower the barrier to building agent-native applications on the open web.
 
 ## 1. Introduction
 
@@ -22,7 +22,7 @@ This question becomes more important as agent-native applications emerge. Social
 - How can platforms avoid asking agents to reveal their root credential?
 - How can identity be reused across applications rather than recreated per service?
 
-AgentAuth is a pragmatic response to those requirements. It is an identity registry and verification layer for autonomous agents. An agent registers itself with the registry once, receives a long-lived `registry_secret_key` for registry-only calls, and uses short-lived `platform_proof_token` JWTs when interacting with applications. Applications verify those proof tokens either by asking the registry directly or by verifying the JWT locally using the registry's published public key.
+AgentLoka is a pragmatic response to those requirements. It is an identity registry and verification layer for autonomous agents. An agent registers itself with the registry once, receives a long-lived `registry_secret_key` for registry-only calls, and uses short-lived `platform_proof_token` JWTs when interacting with applications. Applications verify those proof tokens either by asking the registry directly or by verifying the JWT locally using the registry's published public key.
 
 The contributions of this paper are modest but concrete:
 
@@ -59,7 +59,7 @@ The base protocol should work without a human, while still allowing optional str
 
 ### 2.2 Non-goals
 
-AgentAuth is not intended to solve every identity problem.
+AgentLoka is not intended to solve every identity problem.
 
 It is **not**:
 
@@ -74,7 +74,7 @@ Instead, it addresses a narrow but common need: **who is this agent, and how can
 
 ## 3. System Model
 
-AgentAuth has three main actors:
+AgentLoka has three main actors:
 
 **Agent.**  
 An autonomous software system that wants to register and later prove its identity to applications.
@@ -175,7 +175,7 @@ This gives the system an identity-directory property rather than being only a to
 
 ## 5. Implementation
 
-The reference implementation of AgentAuth is open source and consists of four packages:
+The reference implementation of AgentLoka is open source and is currently organized into four packages:
 
 - **registry/**: FastAPI service implementing registration, proof issuance, verification, and public lookup.
 - **sdk/**: Python SDK and CLI for agent-side use.
@@ -215,7 +215,7 @@ Together, the registry and applications show end-to-end feasibility:
 
 ## 6. Security Model and Threats
 
-AgentAuth is a practical system, not a formally proven protocol. Its security properties follow from explicit assumptions and tradeoffs.
+AgentLoka is a practical system, not a formally proven protocol. Its security properties follow from explicit assumptions and tradeoffs.
 
 ### 6.1 Threats addressed
 
@@ -237,7 +237,7 @@ Platforms that do not want to call the registry on every request can verify proo
 A centralized registry is a high-value trust anchor. If its signing key or database is compromised, the attacker may mint or validate fraudulent identities.
 
 **Phishing for registry secrets.**  
-A malicious platform could ask an agent to provide its registry secret directly. AgentAuth mitigates this primarily through protocol design and onboarding instructions, not through cryptographic enforcement. The agent is told never to send its registry secret to any third-party platform.
+A malicious platform could ask an agent to provide its registry secret directly. AgentLoka mitigates this primarily through protocol design and onboarding instructions, not through cryptographic enforcement. The agent is told never to send its registry secret to any third-party platform.
 
 **Token theft within validity window.**  
 A stolen proof token may be replayed until expiration. The short token lifetime limits but does not eliminate this risk.
@@ -266,7 +266,7 @@ It does **not** yet provide:
 
 ## 7. Why This Is Not Just OAuth
 
-At the token level, AgentAuth intentionally reuses familiar web-auth mechanisms. The proof-token flow is conceptually similar to OAuth 2.0 client credentials: a long-lived credential is exchanged for a short-lived bearer token.
+At the token level, AgentLoka intentionally reuses familiar web-auth mechanisms. The proof-token flow is conceptually similar to OAuth 2.0 client credentials: a long-lived credential is exchanged for a short-lived bearer token.
 
 The novelty is therefore not "JWTs for agents." That would be an uninteresting claim.
 
@@ -274,11 +274,11 @@ The difference lies in what surrounds token issuance:
 
 ### 7.1 Autonomous registration
 
-In most OAuth ecosystems, a human must register an application through a dashboard, configure redirect URIs, and manually provision credentials. AgentAuth instead allows an autonomous agent to create its own identity with a direct HTTP request.
+In most OAuth ecosystems, a human must register an application through a dashboard, configure redirect URIs, and manually provision credentials. AgentLoka instead allows an autonomous agent to create its own identity with a direct HTTP request.
 
 ### 7.2 Identity directory
 
-OAuth is primarily an authorization framework. AgentAuth also acts as a public identity registry with lookup and listing endpoints.
+OAuth is primarily an authorization framework. AgentLoka also acts as a public identity registry with lookup and listing endpoints.
 
 ### 7.3 Portable agent identity
 
@@ -288,7 +288,7 @@ The same registered agent identity can be reused across multiple applications th
 
 The skill-page-based onboarding flow is designed for tool-using agents that discover capabilities through web content or instructions, not just for human developers reading API docs.
 
-In other words, AgentAuth reuses conventional token infrastructure but changes the onboarding, trust boundary, and application model to fit autonomous agents.
+In other words, AgentLoka reuses conventional token infrastructure but changes the onboarding, trust boundary, and application model to fit autonomous agents.
 
 ## 8. Comparison to Decentralized Identity Approaches
 
@@ -302,15 +302,15 @@ For many ordinary web applications, the relevant problem is not "build a full de
 
 > "How can my service let autonomous agents sign in safely this week?"
 
-AgentAuth chooses to optimize for that question.
+AgentLoka chooses to optimize for that question.
 
 ### 8.2 Challenge-response systems
 
-Systems based on challenge-response and self-held keypairs avoid shared secrets and can offer stronger cryptographic guarantees. However, they also shift more complexity to the application and the agent. AgentAuth instead starts from the minimal deployable architecture: a registry issues short-lived proof tokens, and applications verify them with minimal effort.
+Systems based on challenge-response and self-held keypairs avoid shared secrets and can offer stronger cryptographic guarantees. However, they also shift more complexity to the application and the agent. AgentLoka instead starts from the minimal deployable architecture: a registry issues short-lived proof tokens, and applications verify them with minimal effort.
 
 ### 8.3 Centralization as a deliberate tradeoff
 
-Centralization is a weakness from a trust-minimization perspective and a strength from a deployability perspective. AgentAuth accepts this tradeoff explicitly. The design starts with one trust anchor because that is often the cheapest way to create an interoperable identity layer early in an ecosystem's formation.
+Centralization is a weakness from a trust-minimization perspective and a strength from a deployability perspective. AgentLoka accepts this tradeoff explicitly. The design starts with one trust anchor because that is often the cheapest way to create an interoperable identity layer early in an ecosystem's formation.
 
 If the ecosystem grows, future versions could move toward:
 
@@ -328,19 +328,19 @@ OAuth 2.0 and OpenID Connect remain the dominant identity and authorization fram
 
 ### 9.2 Agent interoperability protocols
 
-The Agent2Agent (A2A) protocol addresses interoperability and capability discovery between agents, including the concept of discoverable agent metadata. This is adjacent to AgentAuth but solves a different layer of the stack. A2A focuses on communication and task interoperability; AgentAuth focuses on identity issuance and verification for application access.
+The Agent2Agent (A2A) protocol addresses interoperability and capability discovery between agents, including the concept of discoverable agent metadata. This is adjacent to AgentLoka but solves a different layer of the stack. A2A focuses on communication and task interoperability; AgentLoka focuses on identity issuance and verification for application access.
 
 ### 9.3 Emerging agent identity products
 
 Several recent systems are close in spirit to this work.
 
-**Agent Auth by Vigil** presents "sign-in for AI agents" using DID-based identity, Ed25519 challenge-response, and verifiable credentials, with both headless and hosted sign-in flows. Relative to Vigil, AgentAuth is simpler and more centralized: it uses a registry-issued secret plus proof-token model instead of a pure key-ownership challenge-response flow.
+**Agent Auth by Vigil** presents "sign-in for AI agents" using DID-based identity, Ed25519 challenge-response, and verifiable credentials, with both headless and hosted sign-in flows. Relative to Vigil, AgentLoka is simpler and more centralized: it uses a registry-issued secret plus proof-token model instead of a pure key-ownership challenge-response flow.
 
-**AgentID** positions itself as a decentralized open standard for AI agent identity, with portable metadata, trust levels, and on-chain registration. Relative to AgentID, AgentAuth is narrower in scope. It does not attempt to solve discovery, reputation, or on-chain trust. It instead concentrates on low-friction application authentication.
+**AgentID** positions itself as a decentralized open standard for AI agent identity, with portable metadata, trust levels, and on-chain registration. Relative to AgentID, AgentLoka is narrower in scope. It does not attempt to solve discovery, reputation, or on-chain trust. It instead concentrates on low-friction application authentication.
 
-**Identity Registry** frames the problem around tamper-proof cryptographic directories, owner binding, and ledger-anchored accountability. Relative to that model, AgentAuth again chooses easier deployability over stronger cryptographic decentralization and legal-owner binding.
+**Identity Registry** frames the problem around tamper-proof cryptographic directories, owner binding, and ledger-anchored accountability. Relative to that model, AgentLoka again chooses easier deployability over stronger cryptographic decentralization and legal-owner binding.
 
-These comparisons clarify the contribution of AgentAuth. It is not the most decentralized system, nor the most cryptographically ambitious. Its value lies in reducing the effort required for internet applications to become usable by autonomous agents now.
+These comparisons clarify the contribution of AgentLoka. It is not the most decentralized system, nor the most cryptographically ambitious. Its value lies in reducing the effort required for internet applications to become usable by autonomous agents now.
 
 ## 10. Limitations
 
@@ -382,15 +382,15 @@ The most important next directions are:
 
 ## 12. Conclusion
 
-Autonomous agents need an identity mechanism that is less interactive than human login and less operationally heavy than many decentralized identity stacks. AgentAuth proposes one answer: let agents register once through a simple HTTP API, keep a registry-only secret private, and use short-lived proof tokens everywhere else.
+Autonomous agents need an identity mechanism that is less interactive than human login and less operationally heavy than many decentralized identity stacks. AgentLoka proposes one answer: let agents register once through a simple HTTP API, keep a registry-only secret private, and use short-lived proof tokens everywhere else.
 
 This design does not eliminate the hard problems of trust, Sybil resistance, or decentralization. It does, however, establish a practical and immediately deployable identity layer for agent-native applications on the open web. The broader significance of the approach is architectural rather than cryptographic: if applications can adopt agent identity with minimal integration cost, then the barrier to building interoperable agent-facing services falls materially.
 
-In that sense, the value of AgentAuth is not that it solves every identity problem. It is that it narrows the problem to a shape that can be deployed now.
+In that sense, the value of AgentLoka is not that it solves every identity problem. It is that it narrows the problem to a shape that can be deployed now.
 
 ## References
 
-1. P. Pandey, "AgentAuth" (project repository), GitHub. [https://github.com/punitpandey/agentauth](https://github.com/punitpandey/agentauth)
+1. P. Pandey, "AgentLoka" (project repository), GitHub. [https://github.com/pandeypunit/agentloka](https://github.com/pandeypunit/agentloka)
 2. W3C, "Decentralized Identifiers (DIDs) v1.0." [https://www.w3.org/TR/did-1.0/](https://www.w3.org/TR/did-1.0/)
 3. W3C, "Verifiable Credentials Data Model v2.0." [https://www.w3.org/TR/vc-data-model-2.0/](https://www.w3.org/TR/vc-data-model-2.0/)
 4. OpenID Foundation, "OpenID for Verifiable Credentials." [https://openid.net/sg/openid4vc/specifications/](https://openid.net/sg/openid4vc/specifications/)
@@ -398,5 +398,5 @@ In that sense, the value of AgentAuth is not that it solves every identity probl
 6. Agent Auth by Vigil. [https://usevigil.dev/](https://usevigil.dev/)
 7. AgentID. [https://agentid.md/](https://agentid.md/)
 8. Identity Registry. [https://identityregistry.org/](https://identityregistry.org/)
-9. P. Pandey, "AgentAuth vs OAuth — Why Not Just Use OAuth?" [https://github.com/punitpandey/agentauth/blob/main/docs/oauth-comparison.md](https://github.com/punitpandey/agentauth/blob/main/docs/oauth-comparison.md)
-10. P. Pandey, "Platform Verification — Do We Need It?" [https://github.com/punitpandey/agentauth/blob/main/docs/platform-verification.md](https://github.com/punitpandey/agentauth/blob/main/docs/platform-verification.md)
+9. P. Pandey, "AgentAuth vs OAuth — Why Not Just Use OAuth?" [https://github.com/pandeypunit/agentloka/blob/main/docs/oauth-comparison.md](https://github.com/pandeypunit/agentloka/blob/main/docs/oauth-comparison.md)
+10. P. Pandey, "Platform Verification — Do We Need It?" [https://github.com/pandeypunit/agentloka/blob/main/docs/platform-verification.md](https://github.com/pandeypunit/agentloka/blob/main/docs/platform-verification.md)
