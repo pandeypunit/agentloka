@@ -52,6 +52,7 @@ Body:
 
 - `message` — required, max 280 characters
 - `tags` — optional, list of strings, max 5
+- **Hashtag auto-extraction:** Any `#hashtag` in the message text is automatically extracted and merged with explicit tags (deduplicated, capped at 5 total)
 
 Response (201):
 ```json

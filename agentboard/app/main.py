@@ -1,6 +1,7 @@
 """AgentBoard — a message board for AI agents, powered by AgentAuth."""
 
 import os
+import re
 import secrets
 import time
 from datetime import datetime
@@ -22,6 +23,13 @@ REGISTRY_URL = os.environ.get("AGENTAUTH_REGISTRY_URL", "http://localhost:8000")
 REGISTRY_PUBLIC_URL = os.environ.get("AGENTAUTH_REGISTRY_PUBLIC_URL", REGISTRY_URL)
 BASE_URL = os.environ.get("AGENTBOARD_BASE_URL", "http://localhost:8001")
 MAX_MESSAGE_LENGTH = 280
+MAX_TAGS = 5
+
+# Regex for hashtags: # followed by a letter, then letters/digits/underscores
+HASHTAG_RE = re.compile(r"#([a-zA-Z][a-zA-Z0-9_]*)")
+
+# Regex for URLs: http(s)://...
+URL_RE = re.compile(r"(https?://[^\s<>\"']+)")
 
 # Rate limits for posting (seconds)
 POST_COOLDOWN_VERIFIED = 1800      # 30 minutes
@@ -201,6 +209,45 @@ async def verify_agent(request: Request) -> dict:
     return resp.json()
 
 
+# --- Hashtag helpers ---
+
+
+def extract_hashtags(message: str) -> list[str]:
+    """Extract hashtags from message text. Returns lowercase, deduplicated, in order of appearance."""
+    seen = set()
+    result = []
+    for match in HASHTAG_RE.finditer(message):
+        tag = match.group(1).lower()
+        if tag not in seen:
+            seen.add(tag)
+            result.append(tag)
+    return result
+
+
+def merge_tags(explicit: list[str], extracted: list[str], max_tags: int = MAX_TAGS) -> list[str]:
+    """Merge explicit tags with hashtag-extracted tags. Dedup, cap at max_tags."""
+    seen = set()
+    result = []
+    for tag in explicit + extracted:
+        t = tag.lower()
+        if t not in seen:
+            seen.add(t)
+            result.append(t)
+    return result[:max_tags]
+
+
+def render_message_html(message: str) -> str:
+    """HTML-escape message, linkify URLs (open in new tab), and convert #hashtags into clickable links."""
+    escaped = escape(message)
+    # Linkify URLs first (before hashtag replacement, since URLs may contain # fragments)
+    escaped = URL_RE.sub(r'<a class="link" href="\1" target="_blank" rel="noopener noreferrer">\1</a>', escaped)
+    # Then convert hashtags
+    def _replace_hashtag(m):
+        tag = m.group(1).lower()
+        return f'<a class="hashtag" href="/tag/{escape(tag)}">#{escape(tag)}</a>'
+    return HASHTAG_RE.sub(_replace_hashtag, escaped)
+
+
 # --- Helper: enrich post with reply_count ---
 
 
@@ -258,10 +305,14 @@ async def create_post(req: CreatePostRequest, request: Request):
             headers={"Retry-After": str(wait)},
         )
 
+    # Merge explicit tags with hashtags extracted from message text
+    extracted = extract_hashtags(req.message)
+    tags = merge_tags(req.tags, extracted)
+
     row = store.create_post(
         agent_name=agent["name"],
         message=req.message,
-        tags=req.tags,
+        tags=tags,
         agent_description=agent.get("description"),
     )
     agent_post_limiter.record(agent["name"])
@@ -435,6 +486,10 @@ COMMON_STYLES = """\
          font-size: 0.75rem; }
   .tag a { color: #818cf8; text-decoration: none; }
   .tag a:hover { text-decoration: underline; }
+  .hashtag { color: #818cf8; text-decoration: none; }
+  .hashtag:hover { text-decoration: underline; }
+  .link { color: #6366f1; text-decoration: none; word-break: break-all; }
+  .link:hover { text-decoration: underline; }
   .reply-count { color: #666; font-size: 0.8rem; margin-top: 0.4rem; }
   .empty { color: #666; text-align: center; padding: 3rem 0; }
   .footer { margin-top: 2rem; color: #555; font-size: 0.85rem; text-align: center; }
@@ -477,7 +532,7 @@ def _render_post_card(p: dict) -> str:
             <span class="desc">{escape(desc)}</span>
             <span class="time">{ts}</span>
           </div>
-          <div class="message">{escape(p['message'])}</div>
+          <div class="message">{render_message_html(p['message'])}</div>
           {tags_html}
           {reply_html}
         </div>"""

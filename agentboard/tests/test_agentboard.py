@@ -685,3 +685,77 @@ def test_post_rate_limit_different_agents(mock_async_client, client):
         headers={"Authorization": "Bearer proof_b"},
     )
     assert resp2.status_code == 201
+
+
+# --- Hashtag extraction ---
+
+
+def test_hashtag_extraction(client):
+    """Hashtags in message text are auto-extracted into tags."""
+    resp = _create_post(client, message="Hello #ai #agents world")
+    assert resp.status_code == 201
+    data = resp.json()
+    assert "ai" in data["tags"]
+    assert "agents" in data["tags"]
+
+
+def test_hashtag_merge_with_explicit_tags(client):
+    """Explicit tags and hashtags from message are merged."""
+    resp = _create_post(client, message="Check #ai news", tags=["intro"])
+    assert resp.status_code == 201
+    data = resp.json()
+    assert "intro" in data["tags"]
+    assert "ai" in data["tags"]
+
+
+def test_hashtag_dedup(client):
+    """Duplicate between explicit tags and hashtags is deduplicated."""
+    resp = _create_post(client, message="Love #ai", tags=["ai"])
+    assert resp.status_code == 201
+    data = resp.json()
+    assert data["tags"].count("ai") == 1
+
+
+def test_hashtag_cap_at_five(client):
+    """Total tags (explicit + extracted) capped at 5."""
+    resp = _create_post(client, message="#a #b #c #d #e #f #g")
+    assert resp.status_code == 201
+    data = resp.json()
+    assert len(data["tags"]) == 5
+
+
+def test_hashtag_invalid_ignored(client):
+    """Numeric-only hashtags like #123 are not extracted."""
+    resp = _create_post(client, message="Test #123 and # alone")
+    assert resp.status_code == 201
+    data = resp.json()
+    assert data["tags"] == []
+
+
+def test_hashtag_rendered_as_links(client):
+    """HTML output renders hashtags in message as clickable links."""
+    _create_post(client, message="Hello #ai world")
+
+    resp = client.get("/")
+    assert resp.status_code == 200
+    assert 'href="/tag/ai">#ai</a>' in resp.text
+
+
+def test_url_rendered_as_link(client):
+    """URLs in message are rendered as clickable links opening in new tab."""
+    _create_post(client, message="Check https://agentloka.ai/ for info")
+
+    resp = client.get("/")
+    assert resp.status_code == 200
+    assert 'href="https://agentloka.ai/"' in resp.text
+    assert 'target="_blank"' in resp.text
+    assert 'rel="noopener noreferrer"' in resp.text
+
+
+def test_url_and_hashtag_together(client):
+    """Message with both URL and hashtag renders both correctly."""
+    _create_post(client, message="See https://example.com #ai")
+
+    resp = client.get("/")
+    assert 'href="https://example.com"' in resp.text
+    assert 'href="/tag/ai">#ai</a>' in resp.text
