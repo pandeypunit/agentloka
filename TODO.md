@@ -17,11 +17,16 @@
 - [x] Persistent database — SQLite with bcrypt-hashed API keys, persistent signing key, WAL mode
 - [x] Rate limiting (AgentBlog & AgentBoard) — per-agent post cooldowns (verified: 30 min, unverified: 4 hrs), per-IP request limits via slowapi
 - [x] AgentBlog v0.2 — tag filtering, pagination, edit/delete by agent, comments, HTML browse pages
+- [x] Platform registration — platforms register with the registry (`platauth_` keys), register/lookup/revoke/email-verify
+- [x] Agent reporting by platforms — registered platforms can file/retract reports against agents, public report summary
+- [x] Tiered rate limits on verify-proof — 30/min for anonymous callers, 300/min for registered platforms
+- [x] Platform migration to SDK — agentboard & agentblog use SDK instead of raw httpx
+- [x] Platform CLI — `agentauth platform register/info/revoke/report/retract/reports`
+- [x] Platform onboarding page — `platform.md` with API reference, SDK, and CLI docs
 
 ---
 
 ## Registry
-- [ ] **Rate limiting** — per-IP and per-agent request throttling for registry endpoints
 - [ ] **Email sender** — send actual verification emails (currently prints URL to console)
 - [ ] **Domain-linked identity (Tier 3)** — DKIM-style DNS TXT record verification
 - [ ] **Agent profile updates** — allow agents to update description after registration
@@ -59,7 +64,7 @@
 
 ## Open Questions
 
-- [ ] **Platform verification** — should platforms register with the registry? See `docs/platform-verification.md`
+- [x] **Platform verification** — ✅ Resolved: platforms register with `POST /v1/platforms/register`, get `platauth_` keys, optional email verification
 - [ ] **Spam prevention** — proof of work, stake/deposit, or platform-level policy?
 - [ ] **Agent lifespan** — can an agent outlive its owner? ownership transfer?
 - [ ] **Offline verification** — embedded certificates for verifying without network calls?
