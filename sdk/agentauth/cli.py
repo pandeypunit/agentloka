@@ -97,13 +97,14 @@ def platform():
 @platform.command("register")
 @click.argument("platform_name")
 @click.option("--domain", "-d", required=True, help="Platform domain (e.g. myplatform.example.com)")
+@click.option("--description", "-D", default=None, help="Short description (max 140 chars)")
 @click.option("--email", "-e", default=None, help="Optional email for verification")
 @click.pass_context
-def platform_register(ctx, platform_name, domain, email):
+def platform_register(ctx, platform_name, domain, description, email):
     """Register a new platform and save credentials locally."""
     auth: AgentAuth = ctx.obj["auth"]
     try:
-        result = auth.register_platform(platform_name, domain=domain, email=email)
+        result = auth.register_platform(platform_name, domain=domain, description=description, email=email)
         click.echo(f"Platform '{platform_name}' registered successfully.")
         click.echo(f"  Platform Secret Key: {result['platform_secret_key']}")
         click.echo(f"  Domain: {result['domain']}")

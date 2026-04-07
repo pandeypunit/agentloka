@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS server_metadata (
 CREATE TABLE IF NOT EXISTS platforms (
     name              TEXT PRIMARY KEY,
     domain            TEXT NOT NULL,
+    description       TEXT,
     email             TEXT,
     secret_key_hash   TEXT NOT NULL,
     secret_key_prefix TEXT NOT NULL,
@@ -307,6 +308,7 @@ class RegistryStore:
         return PlatformResponse(
             name=row["name"],
             domain=row["domain"],
+            description=row["description"] if "description" in row.keys() else None,
             platform_secret_key=platform_secret_key,
             verified=bool(row["verified"]),
             created_at=datetime.fromisoformat(row["created_at"]),
@@ -314,7 +316,7 @@ class RegistryStore:
         )
 
     def register_platform(
-        self, name: str, domain: str, email: str | None = None
+        self, name: str, domain: str, description: str | None = None, email: str | None = None
     ) -> tuple[PlatformResponse | None, str | None]:
         """Register a new platform. Returns (platform, verification_token) or (None, None) if name is taken."""
         existing = self._db.execute("SELECT 1 FROM platforms WHERE name = ?", (name,)).fetchone()
@@ -325,9 +327,9 @@ class RegistryStore:
         now = datetime.now(UTC).isoformat()
 
         self._db.execute(
-            "INSERT INTO platforms (name, domain, email, secret_key_hash, secret_key_prefix, verified, created_at, active) "
-            "VALUES (?, ?, ?, ?, ?, 0, ?, 1)",
-            (name, domain, email, self._hash_api_key(key), self._platform_key_prefix(key), now),
+            "INSERT INTO platforms (name, domain, description, email, secret_key_hash, secret_key_prefix, verified, created_at, active) "
+            "VALUES (?, ?, ?, ?, ?, ?, 0, ?, 1)",
+            (name, domain, description, email, self._hash_api_key(key), self._platform_key_prefix(key), now),
         )
 
         verification_token = None
@@ -343,6 +345,7 @@ class RegistryStore:
         platform = PlatformResponse(
             name=name,
             domain=domain,
+            description=description,
             platform_secret_key=key,
             important="⚠️ SAVE YOUR platform_secret_key! It is shown ONLY ONCE.",
             verified=False,
@@ -354,12 +357,19 @@ class RegistryStore:
     def get_platform(self, name: str) -> PlatformResponse | None:
         """Look up a platform by name. Public — no secret key in response."""
         row = self._db.execute(
-            "SELECT name, domain, verified, created_at, active FROM platforms WHERE name = ?",
+            "SELECT name, domain, description, verified, created_at, active FROM platforms WHERE name = ?",
             (name,),
         ).fetchone()
         if not row:
             return None
         return self._row_to_platform(row)
+
+    def list_platforms(self) -> list[PlatformResponse]:
+        """List all active platforms. Public."""
+        rows = self._db.execute(
+            "SELECT name, domain, description, verified, created_at, active FROM platforms WHERE active = 1"
+        ).fetchall()
+        return [self._row_to_platform(row) for row in rows]
 
     def get_platform_by_key(self, secret_key: str) -> PlatformResponse | None:
         """Look up a platform by its secret key. Used for auth."""

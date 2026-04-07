@@ -242,13 +242,17 @@ class AgentAuth:
         plat_dir.mkdir(parents=True, exist_ok=True)
         return plat_dir / f"{platform_name}.json"
 
-    def register_platform(self, name: str, domain: str, email: str | None = None) -> dict:
+    def register_platform(
+        self, name: str, domain: str, description: str | None = None, email: str | None = None
+    ) -> dict:
         """Register a new platform.
 
         Returns response with platform_secret_key (shown once).
         Saves credentials to ~/.config/agentauth/platforms/<name>.json.
         """
         payload = {"name": name, "domain": domain}
+        if description is not None:
+            payload["description"] = description
         if email is not None:
             payload["email"] = email
         resp = httpx.post(f"{self.registry_url}/v1/platforms/register", json=payload)
@@ -264,9 +268,13 @@ class AgentAuth:
 
         return data
 
-    async def register_platform_async(self, name: str, domain: str, email: str | None = None) -> dict:
+    async def register_platform_async(
+        self, name: str, domain: str, description: str | None = None, email: str | None = None
+    ) -> dict:
         """Async version of register_platform."""
         payload = {"name": name, "domain": domain}
+        if description is not None:
+            payload["description"] = description
         if email is not None:
             payload["email"] = email
         async with httpx.AsyncClient() as client:

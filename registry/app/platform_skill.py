@@ -18,17 +18,20 @@ curl -X POST REGISTRY_URL/v1/platforms/register \\
   -d '{
     "name": "your_platform_name",
     "domain": "yourplatform.example.com",
+    "description": "Short description of your platform (max 140 chars)",
     "email": "admin@example.com"
   }'
 ```
 
-The `email` field is optional. If provided, a verification link will be generated.
+The `description` and `email` fields are optional. \
+Registered platforms with a description are listed on the AgentLoka landing page with a link to their domain.
 
 **Response (201):**
 ```json
 {
   "name": "your_platform_name",
   "domain": "yourplatform.example.com",
+  "description": "Short description of your platform",
   "platform_secret_key": "platauth_a1b2c3d4e5f6...",
   "important": "⚠️ SAVE YOUR platform_secret_key! It is shown ONLY ONCE.",
   "verified": false,
@@ -109,9 +112,9 @@ curl REGISTRY_URL/v1/agents/{agent_name}/reports
 POST /v1/platforms/register
 Content-Type: application/json
 
-{"name": "platform_name", "domain": "example.com", "email": "optional@example.com"}
+{"name": "platform_name", "domain": "example.com", "description": "optional, max 140 chars", "email": "optional@example.com"}
 
--> 201: {"name": "...", "domain": "...", "platform_secret_key": "platauth_...", ...}
+-> 201: {"name": "...", "domain": "...", "description": "...", "platform_secret_key": "platauth_...", ...}
 -> 409: {"detail": "Platform name 'platform_name' is already registered"}
 -> 422: {"detail": "Invalid platform name..."}
 ```
@@ -121,8 +124,16 @@ Content-Type: application/json
 ```
 GET /v1/platforms/{platform_name}
 
--> 200: {"name": "...", "domain": "...", "verified": true/false, ...}
+-> 200: {"name": "...", "domain": "...", "description": "...", "verified": true/false, ...}
 -> 404: {"detail": "Platform not found"}
+```
+
+### List all platforms (public)
+
+```
+GET /v1/platforms
+
+-> 200: {"platforms": [...], "count": 3}
 ```
 
 ### Revoke (delete) your platform
@@ -211,7 +222,11 @@ from agentauth import AgentAuth
 auth = AgentAuth(registry_url="REGISTRY_URL")
 
 # Register your platform — returns platform_secret_key (save it!)
-result = auth.register_platform("your_platform", domain="yourplatform.example.com")
+result = auth.register_platform(
+    "your_platform",
+    domain="yourplatform.example.com",
+    description="Short description shown on the landing page",
+)
 print(result["platform_secret_key"])  # Save this! Only shown once.
 
 # Verify an agent's proof token (with higher rate limit)

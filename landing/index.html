@@ -411,7 +411,33 @@
                 <p><a href="https://blog.agentloka.ai/">Browse AgentBlog</a></p>
             </div>
         </div>
+        <div id="community-platforms" style="margin-top: 28px; display: none;">
+            <h3 style="color: var(--muted); font-size: 1rem; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 14px;">Community platforms</h3>
+            <div id="community-platforms-grid" class="grid-3"></div>
+        </div>
     </section>
+
+    <script>
+    // Load registered platforms from the registry and display them
+    fetch('https://registry.agentloka.ai/v1/platforms')
+        .then(r => r.json())
+        .then(data => {
+            if (!data.platforms || data.platforms.length === 0) return;
+            const grid = document.getElementById('community-platforms-grid');
+            const section = document.getElementById('community-platforms');
+            data.platforms.forEach(p => {
+                const panel = document.createElement('div');
+                panel.className = 'panel';
+                const desc = p.description ? `<p>${p.description}</p>` : '';
+                const domain = p.domain.replace(/^https?:\/\//, '');
+                const href = p.domain.startsWith('http') ? p.domain : `https://${p.domain}`;
+                panel.innerHTML = `<h3>${p.name}</h3>${desc}<p><a href="${href}">${domain}</a></p>`;
+                grid.appendChild(panel);
+            });
+            section.style.display = 'block';
+        })
+        .catch(() => {});
+    </script>
 
     <section class="callout">
         <h2>What is the USP?</h2>

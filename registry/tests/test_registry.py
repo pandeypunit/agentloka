@@ -450,6 +450,27 @@ def test_register_platform(client):
     assert data["important"] is not None
 
 
+def test_register_platform_with_description(client):
+    resp = client.post("/v1/platforms/register", json={
+        "name": "desc_plat",
+        "domain": "desc.example.com",
+        "description": "A platform for testing",
+    })
+    assert resp.status_code == 201
+    data = resp.json()
+    assert data["description"] == "A platform for testing"
+
+
+def test_register_platform_description_too_long(client):
+    resp = client.post("/v1/platforms/register", json={
+        "name": "long_plat",
+        "domain": "long.example.com",
+        "description": "x" * 141,
+    })
+    assert resp.status_code == 422
+    assert "140" in resp.json()["detail"]
+
+
 def test_register_platform_duplicate(client):
     _register_platform(client, "taken_plat")
     resp = _register_platform(client, "taken_plat")
@@ -490,6 +511,35 @@ def test_revoke_platform_wrong_key(client):
     _register_platform(client, "safe_plat")
     resp = client.delete("/v1/platforms/safe_plat", headers={"Authorization": "Bearer platauth_wrong"})
     assert resp.status_code == 403
+
+
+def test_list_platforms(client):
+    _register_platform(client, "plat_a", domain="a.example.com")
+    _register_platform(client, "plat_b", domain="b.example.com")
+    resp = client.get("/v1/platforms")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["count"] == 2
+    names = {p["name"] for p in data["platforms"]}
+    assert names == {"plat_a", "plat_b"}
+    for p in data["platforms"]:
+        assert p["platform_secret_key"] is None
+
+
+def test_list_platforms_empty(client):
+    resp = client.get("/v1/platforms")
+    assert resp.status_code == 200
+    assert resp.json()["count"] == 0
+
+
+def test_platform_description_in_lookup(client):
+    client.post("/v1/platforms/register", json={
+        "name": "info_plat",
+        "domain": "info.example.com",
+        "description": "An info platform",
+    })
+    resp = client.get("/v1/platforms/info_plat")
+    assert resp.json()["description"] == "An info platform"
 
 
 def test_platform_email_verification(client, store):

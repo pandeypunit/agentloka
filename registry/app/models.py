@@ -71,6 +71,7 @@ class AgentListResponse(BaseModel):
 class RegisterPlatformRequest(BaseModel):
     name: str = Field(..., description="Globally unique platform name")
     domain: str = Field(..., description="Platform domain (e.g. microblog.agentloka.ai)")
+    description: str | None = Field(None, description="Short description of the platform (max 140 chars)")
     email: str | None = Field(None, description="Optional email for verification")
 
 
@@ -80,9 +81,15 @@ class AgentReportSummary(BaseModel):
     reporting_platforms: list[str] = []
 
 
+class PlatformListResponse(BaseModel):
+    platforms: list["PlatformResponse"]
+    count: int
+
+
 class PlatformResponse(BaseModel):
     name: str
     domain: str
+    description: str | None = None
     platform_secret_key: str | None = Field(
         None,
         description="Secret key for platform API calls. "

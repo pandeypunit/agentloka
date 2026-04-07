@@ -6,6 +6,7 @@ import re
 from html import escape
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
@@ -19,6 +20,7 @@ from registry.app.models import (
     AgentReportSummary,
     AgentResponse,
     LinkEmailRequest,
+    PlatformListResponse,
     PlatformResponse,
     ProofTokenResponse,
     ProofVerifyResponse,
@@ -37,6 +39,14 @@ app = FastAPI(
     title="AgentAuth Registry",
     description="The identity layer for AI agents",
     version="0.1.0",
+)
+
+# CORS — allow the landing page and any platform to call the registry API
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["GET", "POST", "DELETE"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 # Rate limiter for verify-proof — tiered: 300/min for registered platforms, 30/min per IP otherwise
@@ -232,7 +242,15 @@ async def register_platform(req: RegisterPlatformRequest):
             "and contain only lowercase letters, numbers, and underscores.",
         )
 
-    result, verification_token = registry_store.register_platform(req.name, req.domain, req.email)
+    if req.description and len(req.description) > 140:
+        raise HTTPException(
+            status_code=422,
+            detail="Platform description must be 140 characters or fewer.",
+        )
+
+    result, verification_token = registry_store.register_platform(
+        req.name, req.domain, description=req.description, email=req.email
+    )
     if result is None:
         raise HTTPException(
             status_code=409,
@@ -257,6 +275,13 @@ async def get_platform(platform_name: str):
             detail=f"Platform '{platform_name}' not found.",
         )
     return platform
+
+
+@app.get("/v1/platforms", response_model=PlatformListResponse)
+async def list_platforms():
+    """List all active platforms. Public endpoint — shown on the landing page."""
+    platforms = registry_store.list_platforms()
+    return PlatformListResponse(platforms=platforms, count=len(platforms))
 
 
 @app.delete("/v1/platforms/{platform_name}")
