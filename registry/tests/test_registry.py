@@ -824,3 +824,107 @@ def test_admin_stats_html(client, monkeypatch):
     assert resp.status_code == 200
     assert "text/html" in resp.headers["content-type"]
     assert "AgentAuth Admin" in resp.text
+
+
+# --- Email sending integration tests ---
+
+
+from unittest.mock import patch
+
+
+def test_register_agent_sends_email(client):
+    """Registration with email should call send_verification_email."""
+    with patch("registry.app.main.send_verification_email") as mock_send:
+        resp = _register(client, "email_agent", email="test@example.com")
+        assert resp.status_code == 201
+        mock_send.assert_called_once()
+        kwargs = mock_send.call_args[1]
+        assert kwargs["to"] == "test@example.com"
+        assert kwargs["entity_type"] == "agent"
+        assert kwargs["entity_name"] == "email_agent"
+        assert "/v1/verify/" in kwargs["verify_url"]
+
+
+def test_register_agent_no_email_no_send(client):
+    """Registration without email should NOT call send_verification_email."""
+    with patch("registry.app.main.send_verification_email") as mock_send:
+        resp = _register(client, "no_email_agent")
+        assert resp.status_code == 201
+        mock_send.assert_not_called()
+
+
+def test_link_email_sends_email(client):
+    """POST /v1/agents/me/email should call send_verification_email."""
+    resp = _register(client, "link_agent")
+    api_key = _api_key(resp)
+    with patch("registry.app.main.send_verification_email") as mock_send:
+        link_resp = client.post(
+            "/v1/agents/me/email",
+            json={"email": "linked@example.com"},
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+        assert link_resp.status_code == 200
+        mock_send.assert_called_once()
+        kwargs = mock_send.call_args[1]
+        assert kwargs["to"] == "linked@example.com"
+        assert kwargs["entity_type"] == "agent"
+
+
+def test_register_platform_sends_email(client):
+    """Platform registration with email should call send_verification_email."""
+    with patch("registry.app.main.send_verification_email") as mock_send:
+        resp = _register_platform(client, "ses_plat", email="admin@example.com")
+        assert resp.status_code == 201
+        mock_send.assert_called_once()
+        kwargs = mock_send.call_args[1]
+        assert kwargs["to"] == "admin@example.com"
+        assert kwargs["entity_type"] == "platform"
+        assert kwargs["entity_name"] == "ses_plat"
+
+
+def test_register_platform_no_email_no_send(client):
+    """Platform registration without email should NOT call send_verification_email."""
+    with patch("registry.app.main.send_verification_email") as mock_send:
+        resp = _register_platform(client, "no_email_plat")
+        assert resp.status_code == 201
+        mock_send.assert_not_called()
+
+
+# --- Rate limiting on registration/email endpoints ---
+
+
+def test_register_agent_rate_limit(client):
+    """6th agent registration from same IP within an hour should be rate limited."""
+    for i in range(5):
+        resp = _register(client, f"rl_bot_{i}")
+        assert resp.status_code == 201
+    resp = _register(client, "rl_bot_5")
+    assert resp.status_code == 429
+    assert "Too many requests" in resp.json()["detail"]
+
+
+def test_register_platform_rate_limit(client):
+    """6th platform registration from same IP within an hour should be rate limited."""
+    for i in range(5):
+        resp = _register_platform(client, f"rl_plat_{i}")
+        assert resp.status_code == 201
+    resp = _register_platform(client, "rl_plat_5")
+    assert resp.status_code == 429
+
+
+def test_link_email_rate_limit(client):
+    """4th link-email call within an hour should be rate limited."""
+    resp = _register(client, "rl_link_bot")
+    api_key = _api_key(resp)
+    for i in range(3):
+        client.post(
+            "/v1/agents/me/email",
+            json={"email": f"rl{i}@example.com"},
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+    resp = client.post(
+        "/v1/agents/me/email",
+        json={"email": "rl3@example.com"},
+        headers={"Authorization": f"Bearer {api_key}"},
+    )
+    assert resp.status_code == 429

@@ -15,6 +15,7 @@ from slowapi.util import get_remote_address
 import json
 
 from registry.app.auth import get_authenticated_admin, get_authenticated_agent, get_authenticated_platform
+from registry.app.email import send_verification_email
 from registry.app.models import (
     AgentListResponse,
     AgentReportSummary,
@@ -67,20 +68,39 @@ def _verify_proof_limit(key: str) -> str:
     return "30/minute"
 
 
+def _registration_email_key(request: Request) -> str:
+    """Rate limit key for registration endpoints: by IP."""
+    return f"reg:{get_remote_address(request)}"
+
+
+def _link_email_key(request: Request) -> str:
+    """Rate limit key for link-email: by authenticated agent name."""
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        agent = registry_store.get_agent_by_key(auth_header[7:])
+        if agent:
+            return f"link:{agent.name}"
+    return f"link:{get_remote_address(request)}"
+
+
 limiter = Limiter(key_func=_verify_proof_key_func)
 app.state.limiter = limiter
 
 
 @app.exception_handler(RateLimitExceeded)
 async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
-    return JSONResponse(
-        status_code=429,
-        content={
-            "detail": "Rate limit exceeded on verify-proof. "
+    path = request.url.path
+    if "verify-proof" in path:
+        detail = (
+            "Rate limit exceeded on verify-proof. "
             f"Register your platform at POST {REGISTRY_BASE_URL}/v1/platforms/register "
-            "for a higher rate limit (300/min vs 30/min).",
-        },
-    )
+            "for a higher rate limit (300/min vs 30/min)."
+        )
+    elif "register" in path or "email" in path:
+        detail = "Too many requests. Email verification is rate-limited. Try again later."
+    else:
+        detail = "Rate limit exceeded. Try again later."
+    return JSONResponse(status_code=429, content={"detail": detail})
 
 
 @app.get("/", include_in_schema=False)
@@ -91,7 +111,8 @@ async def skill_page():
 
 
 @app.post("/v1/agents/register", response_model=AgentResponse, status_code=201)
-async def register_agent(req: RegisterAgentRequest):
+@limiter.limit("5/hour", key_func=_registration_email_key)
+async def register_agent(req: RegisterAgentRequest, request: Request):
     """Register a new agent. No auth needed. Returns an API key (shown once)."""
     if not AGENT_NAME_PATTERN.match(req.name):
         raise HTTPException(
@@ -112,11 +133,9 @@ async def register_agent(req: RegisterAgentRequest):
             "If you lost your registry_secret_key, it cannot be recovered — register a new agent with a different name.",
         )
 
-    if verification_token:
+    if verification_token and req.email:
         verify_url = f"{REGISTRY_BASE_URL}/v1/verify/{verification_token}"
-        # In production, send an actual email. For now, log the URL.
-        log.info("Verification URL for agent '%s': %s", req.name, verify_url)
-        print(f"\n  Verification email for '{req.name}': {verify_url}\n")
+        send_verification_email(to=req.email, verify_url=verify_url, entity_type="agent", entity_name=req.name)
 
     return result
 
@@ -142,16 +161,14 @@ async def get_me(request: Request):
 
 
 @app.post("/v1/agents/me/email")
+@limiter.limit("3/hour", key_func=_link_email_key)
 async def link_email(req: LinkEmailRequest, request: Request):
     """Link an email to your agent. Triggers a verification email."""
     agent_name = await get_authenticated_agent(request)
 
     token = registry_store.link_email(agent_name, req.email)
     verify_url = f"{REGISTRY_BASE_URL}/v1/verify/{token}"
-
-    # In production, send an actual email. For now, log the URL.
-    log.info("Verification URL for agent '%s': %s", agent_name, verify_url)
-    print(f"\n  Verification email for '{agent_name}': {verify_url}\n")
+    send_verification_email(to=req.email, verify_url=verify_url, entity_type="agent", entity_name=agent_name)
 
     return {"agent_name": agent_name, "message": "Verification email sent. Check your inbox."}
 
@@ -232,7 +249,8 @@ async def list_agents():
 
 
 @app.post("/v1/platforms/register", response_model=PlatformResponse, status_code=201)
-async def register_platform(req: RegisterPlatformRequest):
+@limiter.limit("5/hour", key_func=_registration_email_key)
+async def register_platform(req: RegisterPlatformRequest, request: Request):
     """Register a new platform. No auth needed. Returns a platform_secret_key (shown once)."""
     if not AGENT_NAME_PATTERN.match(req.name):
         raise HTTPException(
@@ -257,10 +275,9 @@ async def register_platform(req: RegisterPlatformRequest):
             detail=f"Platform name '{req.name}' is already registered.",
         )
 
-    if verification_token:
+    if verification_token and req.email:
         verify_url = f"{REGISTRY_BASE_URL}/v1/verify-platform/{verification_token}"
-        log.info("Verification URL for platform '%s': %s", req.name, verify_url)
-        print(f"\n  Verification email for platform '{req.name}': {verify_url}\n")
+        send_verification_email(to=req.email, verify_url=verify_url, entity_type="platform", entity_name=req.name)
 
     return result
 
