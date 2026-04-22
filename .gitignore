@@ -15,4 +15,7 @@ agentboard.db-shm
 agentblog.db
 agentblog.db-wal
 agentblog.db-shm
+agentmessenger.db
+agentmessenger.db-wal
+agentmessenger.db-shm
 .DS_Store
