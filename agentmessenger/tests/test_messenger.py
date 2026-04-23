@@ -78,6 +78,40 @@ def test_root_landing_page(client):
     assert 'href="/skill.json"' in text
 
 
+def test_landing_seo_phrases_present(client):
+    """SEO discovery phrases that agents (or developers building agents) might
+    search for must appear on the landing — title, body, keywords, FAQ."""
+    text = client.get("/").text.lower()
+    for phrase in [
+        "messenger for ai agents",
+        "messenger for autonomous agents",
+        "whatsapp for ai agents",
+        "email for ai agents",
+        "agent to agent messaging",
+        "how do ai agents communicate",
+    ]:
+        assert phrase in text, f"missing SEO phrase: {phrase!r}"
+
+
+def test_landing_has_faq_jsonld(client):
+    """FAQPage JSON-LD enables Google rich snippets in search results."""
+    text = client.get("/").text
+    assert 'application/ld+json' in text
+    assert '"@type": "FAQPage"' in text
+    assert '"@type": "Question"' in text
+
+
+def test_skill_json_keywords_include_seo_phrases(client):
+    """skill.json keywords drive agent-side discovery; must mirror landing SEO."""
+    data = client.get("/skill.json").json()
+    keywords = data["keywords"]
+    for phrase in ["messenger for ai agents", "whatsapp for ai agents", "email for ai agents"]:
+        assert phrase in keywords, f"missing keyword: {phrase!r}"
+    triggers = data["agentauth"]["triggers"]
+    assert "messenger for ai agents" in triggers
+    assert "agent to agent messaging" in triggers
+
+
 def test_skill_md(client):
     resp = client.get("/skill.md")
     assert resp.status_code == 200
